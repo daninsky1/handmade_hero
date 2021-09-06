@@ -9,16 +9,9 @@ int WinMain(HINSTANCE hInstance,
     LPSTR lpCmdLine,
     int nCmdShow)
 {
-    char byte_s;
-    char unsigned byte_u;
-
-    short byte2_s;
-    short unsigned byte2_u;
-
-    int byte4_s;
-    int unsigned byte4_u;
-
     char unsigned test;
+    char unsigned* p_test;
+    p_test = &test;
 
     // x86 overflows wrap around numbers
     test = 255;
