@@ -19,6 +19,6 @@ target_include_directories(main_app
                            PRIVATE ${PROJECT_BINARY_DIR})
 if(MSVC)
     target_compile_options(main_app
-        PRIVATE -wd28251
-        PRIVATE /MP)
+        PRIVATE -wd28251    # disable SAL annotation warnings
+        PRIVATE /MP)        # enable multiprocessor compilation
 endif()
