@@ -12,13 +12,12 @@ else()
 endif()
 
 set(MAIN_APP_SOURCES src/main.cpp)
-add_executable(main_app WIN32
-               src/main.cpp)
-set_property(TARGET main_app PROPERTY CXX_STANDARD 17)
-target_include_directories(main_app
+add_executable(handmade_hero_app WIN32 ${MAIN_APP_SOURCES})
+set_property(TARGET handmade_hero_app PROPERTY CXX_STANDARD 17)
+target_include_directories(handmade_hero_app
                            PRIVATE ${PROJECT_BINARY_DIR})
 if(MSVC)
-    target_compile_options(main_app
+    target_compile_options(handmade_hero_app
         PRIVATE -wd28251    # disable SAL annotation warnings
         PRIVATE /MP)        # enable multiprocessor compilation
 endif()

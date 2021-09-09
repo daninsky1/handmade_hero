@@ -4,24 +4,45 @@
 #include "handmade_hero_config.h"
 
 // TODO(casey): This is a global for now.
+
+struct Win32OffscreenBuffer {
+    BITMAPINFO info;
+    void* memory;
+    int width;
+    int height;
+    int bytes_per_pixel;
+};
+
+// TODO:(casey): This is a global for now
 static bool running;
+static Win32OffscreenBuffer global_backbuffer;
 
-static BITMAPINFO bitmap_info;
-static void* bitmap_memory;
-static int bitmap_width;
-static int bitmap_height;
-static int bytes_per_pixel = 4;
+struct Win32WindowDimension {
+    int width;
+    int height;
+};
 
-static void render_test_gradient(int xoff, int yoff)
+Win32WindowDimension win32_get_window_dimension(HWND window)
 {
-    int w = bitmap_width;
-    int h = bitmap_height;
-    int pitch = w * bytes_per_pixel;
-    uint8_t* row = static_cast<uint8_t*>(bitmap_memory);
-    uint32_t* pixel = static_cast<uint32_t*>(bitmap_memory);
+    Win32WindowDimension result;
+    RECT client_rect;
+    GetClientRect(window, &client_rect);
+    result.width = client_rect.right - client_rect.left;
+    result.height = client_rect.bottom - client_rect.top;
 
-    for (int y = 0; y < bitmap_height; ++y) {
-        for (int x = 0; x < bitmap_width; ++x) {
+    return result;
+}
+
+static void render_test_gradient(Win32OffscreenBuffer buffer, int xoff, int yoff)
+{
+    int w = buffer.width;
+    int h = buffer.height;
+    int pitch = w * buffer.bytes_per_pixel;
+    uint8_t* row = static_cast<uint8_t*>(buffer.memory);
+    uint32_t* pixel = static_cast<uint32_t*>(buffer.memory);
+
+    for (int y = 0; y < buffer.height; ++y) {
+        for (int x = 0; x < buffer.width; ++x) {
             // pixel int memory: BB GG RR XX
             // LITTLE ENDIAN ARCHITECTURE
             // Windows invert pixel on registers
@@ -34,46 +55,46 @@ static void render_test_gradient(int xoff, int yoff)
     }
 }
 
-static void win32_resize_dib_section(int w, int h)
+static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
 {
     // TODO(casey): Bulletproof this.
     // Maybe don't free first, free after, then free first if that fails.
 
-    /*if (bitmap_memory) {
-        VirtualFree(bitmap_memory, 0, MEM_RELEASE);
-    }*/
+    if (buffer.memory) {
+        VirtualFree(buffer.memory, 0, MEM_RELEASE);
+    }
 
-    bitmap_width = w;
-    bitmap_height = h;
+    buffer.width = w;
+    buffer.height = h;
+    buffer.bytes_per_pixel = 4;
 
-    bitmap_info.bmiHeader.biSize = sizeof(bitmap_info.bmiHeader);
-    bitmap_info.bmiHeader.biWidth = bitmap_width;
-    bitmap_info.bmiHeader.biHeight = -bitmap_height;
-    bitmap_info.bmiHeader.biPlanes = 1;
-    bitmap_info.bmiHeader.biBitCount = 32;
-    bitmap_info.bmiHeader.biCompression = BI_RGB;
+    buffer.info.bmiHeader.biSize = sizeof(buffer.info.bmiHeader);
+    buffer.info.bmiHeader.biWidth = buffer.width;
+    buffer.info.bmiHeader.biHeight = -buffer.height;
+    buffer.info.bmiHeader.biPlanes = 1;
+    buffer.info.bmiHeader.biBitCount = 32;
+    buffer.info.bmiHeader.biCompression = BI_RGB;
 
-    int bytes_per_pixel = 4;
-    int bitmap_memory_sz = (bitmap_width*bitmap_height)*bytes_per_pixel;
-    bitmap_memory = VirtualAlloc(0, bitmap_memory_sz, MEM_COMMIT, PAGE_READWRITE);
+    int bitmap_memory_sz = buffer.width * buffer.height * buffer.bytes_per_pixel;
+    buffer.memory = VirtualAlloc(0, bitmap_memory_sz, MEM_COMMIT, PAGE_READWRITE);
 
     // TODO(casey): Probably clear this to black
 }
 
-static void win32_update_window(HDC device_context, RECT* client_rect, int x, int y,
-                                int width, int height)
+static void win32_display_buffer_in_window(HDC device_context,
+                                           int window_width, int window_height,
+                                           Win32OffscreenBuffer buffer,
+                                           int x, int y,
+                                           int width, int height)
 {
-    int window_width = client_rect->right - client_rect->left;
-    int window_height = client_rect->bottom - client_rect->top;
+    // TODO:(casey): Aspect ration correction
     StretchDIBits(device_context,
-        /*
-                  x, y, width, height,
-                  x, y, width, height
-        */
-                  0, 0, bitmap_width, bitmap_height,
+               // x, y, width, height,
+               // x, y, width, 
                   0, 0, window_width, window_height,
-                  bitmap_memory,
-                  &bitmap_info,
+                  0, 0, buffer.width, buffer.height,
+                  buffer.memory,
+                  &buffer.info,
                   DIB_RGB_COLORS, SRCCOPY);
 }
 
@@ -87,14 +108,6 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
     switch (message) {
     case WM_SIZE:
     {
-        HDC device_context = GetDC(window);
-        RECT client_rect;
-        GetClientRect(window, &client_rect);
-        int width = client_rect.right - client_rect.left;
-        int height = client_rect.bottom - client_rect.top;
-        win32_resize_dib_section(width, height);
-        win32_update_window(device_context, &client_rect, 0, 0, width, height);
-        ReleaseDC(window, device_context);
         break;
     }
     case WM_CLOSE:
@@ -118,11 +131,8 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
         LONG width = paint.rcPaint.right - paint.rcPaint.left;
         LONG height = paint.rcPaint.bottom - paint.rcPaint.top;
 
-        RECT client_rect;
-        GetClientRect(window, &client_rect);
-
-
-        win32_update_window(device_context, &client_rect, x, y, width, height);
+        Win32WindowDimension dimension = win32_get_window_dimension(window);
+        win32_display_buffer_in_window(device_context, dimension.width, dimension.height, global_backbuffer, x, y, width, height);
         static DWORD color = WHITENESS;
 
         EndPaint(window, &paint);
@@ -141,10 +151,14 @@ int CALLBACK WinMain(HINSTANCE instance,
                      HINSTANCE, LPSTR lpCmdLine,
                      int nCmdShow)
 {
+    // NOTE(daniel): Resolution
+    int w = 1280;
+    int h = 720;
+    win32_resize_dib_section(global_backbuffer, w, h);
     WNDCLASS window_class = {};
     
     // TODO:(casey): Check if HREDRAW/VREDRAW/OWNDC still matter
-    window_class.style = CS_OWNDC|CS_HREDRAW|CS_VREDRAW;
+    window_class.style = CS_HREDRAW|CS_VREDRAW;
     window_class.lpfnWndProc = win32_main_window_proc_cb;    // handle windows messages
     window_class.hInstance = instance;
 
@@ -181,14 +195,11 @@ int CALLBACK WinMain(HINSTANCE instance,
                     TranslateMessage(&message);
                     DispatchMessage(&message);
                 }
-                render_test_gradient(xoff, yoff);
+                render_test_gradient(global_backbuffer, xoff, yoff);
 
                 HDC device_context = GetDC(window);
-                RECT client_rect;
-                GetClientRect(window, &client_rect);
-                int window_width = client_rect.right - client_rect.left;
-                int window_height = client_rect.bottom - client_rect.top;
-                win32_update_window(device_context, &client_rect, 0, 0, window_width, window_height);
+                Win32WindowDimension dimension = win32_get_window_dimension(window);
+                win32_display_buffer_in_window(device_context, dimension.width, dimension.height, global_backbuffer, 0, 0, dimension.width, dimension.height);
                 ReleaseDC(window, device_context);
 
                 ++xoff;
