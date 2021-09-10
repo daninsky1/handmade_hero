@@ -1,7 +1,9 @@
+#define _USE_MATH_DEFINES
 #include <iostream>
 #include <string>
 #include <sstream>
 #include <cstdint>
+#include <cmath>
 
 #include <windows.h>
 #include <Xinput.h>         // XBox joystick controller
@@ -322,6 +324,58 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
     return result;
 }
 
+struct Win32SoundOutput {
+    int sample_per_second;
+    int hz;               // NOTE(daniel): Note A2
+    int16_t tone_volume;
+    uint32_t running_sample_index;
+    int wave_period;
+    int bytes_per_sample;
+    int secondary_buffer_size;
+};
+
+void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock, DWORD bytes_to_write) {
+    // TODO(casey): More strenuous test!
+    // TODO(casey): Switch to sine wave
+    LPVOID region1;
+    DWORD region1sz;
+    LPVOID region2;
+    DWORD region2sz;
+
+    if (SUCCEEDED(glob_secondary_buffer->Lock(byte_to_lock, bytes_to_write,
+        &region1, &region1sz,
+        &region2, &region2sz, 0))) {
+        // TODO(casey): assert that region1sz/region2sz is valid
+        // TODO(casey): collapse these two loops
+        DWORD region1_sample_count = region1sz / sound_output.bytes_per_sample;
+        int16_t* sample_out = reinterpret_cast<int16_t*>(region1);
+        for (DWORD sample_i = 0; sample_i < region1_sample_count; ++sample_i) {
+            float t = 2.0f * M_PI
+                * static_cast<float>(sound_output.running_sample_index)
+                / static_cast<float>(sound_output.wave_period);
+            float sine_value = std::sinf(t);
+            int16_t sample_value = static_cast<int16_t>(sine_value * sound_output.tone_volume);
+            *sample_out++ = sample_value;
+            *sample_out++ = sample_value;
+            sound_output.running_sample_index++;
+        }
+
+        DWORD region2_sample_count = region2sz / sound_output.bytes_per_sample;
+        sample_out = reinterpret_cast<int16_t*>(region2);
+        for (DWORD sample_i = 0; sample_i < region2_sample_count; ++sample_i) {
+            float t = 2.0f * M_PI
+                * static_cast<float>(sound_output.running_sample_index)
+                / static_cast<float>(sound_output.wave_period);
+            float sine_value = std::sinf(t);
+            int16_t sample_value = static_cast<int16_t>(sine_value * sound_output.tone_volume);
+            *sample_out++ = sample_value;
+            *sample_out++ = sample_value;
+            sound_output.running_sample_index++;
+        }
+        glob_secondary_buffer->Unlock(region1, region1sz, region2, region2sz);
+    }
+}
+
 int CALLBACK WinMain(HINSTANCE instance,
                      HINSTANCE, LPSTR lpCmdLine,
                      int nCmdShow)
@@ -364,17 +418,21 @@ int CALLBACK WinMain(HINSTANCE instance,
             // are not sharing it with anyone
             HDC device_context = GetDC(window);
 
-            int sample_per_second = 48000;
-            int hz = 128;               // NOTE(daniel): Note A2
-            int16_t tone_volume = 8000;
-            uint32_t running_sample_index = 0;
-            int square_wave_period = sample_per_second/hz;
-            int half_square_wave_period = square_wave_period / 2;
-            int bytes_per_sample = sizeof(int16_t) * 2;
-            int secondary_buffer_size = sample_per_second * bytes_per_sample;
+            Win32SoundOutput sound_output = {};
 
-            win32_init_dsound(window, sample_per_second, secondary_buffer_size);
+            sound_output.sample_per_second = 48000;
+            sound_output.hz = 110;
+            sound_output.tone_volume = 16000;
+            sound_output.running_sample_index = 0;
+            sound_output.wave_period = sound_output.sample_per_second / sound_output.hz;
+            sound_output.bytes_per_sample = sizeof(int16_t) * 2;
+            sound_output.secondary_buffer_size = sound_output.sample_per_second * sound_output.bytes_per_sample;
+
+            
+            win32_init_dsound(window, sound_output.sample_per_second, sound_output.secondary_buffer_size);
+            win32_fill_sound_buffer(sound_output, 0, sound_output.secondary_buffer_size);
             glob_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
+            bool sound_is_playing = true;
 
 
             // NOTE(daniel): GENERIC JOYSTICK CONTROLLER
@@ -492,48 +550,23 @@ int CALLBACK WinMain(HINSTANCE instance,
                 DWORD write_cursor_pos;
                 if (SUCCEEDED(glob_secondary_buffer->GetCurrentPosition(&play_cursor_pos, &write_cursor_pos))) {
                     // NOTE(casey): DirectSound output test
-                    DWORD byte_to_lock = running_sample_index * bytes_per_sample % secondary_buffer_size;
-                    DWORD bytes_to_write;
-                    if (byte_to_lock > play_cursor_pos) {
-                        bytes_to_write = secondary_buffer_size - byte_to_lock;
+                    DWORD byte_to_lock = sound_output.running_sample_index
+                        * sound_output.bytes_per_sample
+                        % sound_output.secondary_buffer_size;
+                    DWORD bytes_to_write = 0;
+                    // TODO(casey): We need a more accurate check than byte_to_lock == play_cursor_pos
+                    if (byte_to_lock == play_cursor_pos) {
+                        
+                    }
+                    else if (byte_to_lock > play_cursor_pos) {
+                        bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
                         bytes_to_write += play_cursor_pos;
                     }
                     else {
                         bytes_to_write = play_cursor_pos - byte_to_lock;
                     }
 
-                    // TODO(casey): More strenuous test!
-                    LPVOID region1;
-                    DWORD region1sz;
-                    LPVOID region2;
-                    DWORD region2sz;
-
-                    if (SUCCEEDED(glob_secondary_buffer->Lock(byte_to_lock, bytes_to_write,
-                                                              &region1, &region1sz,
-                                                              &region2, &region2sz,
-                                                              0))) {
-                        // TODO(casey): assert that region1sz/region2sz is valid
-                        // TODO(casey): collapse these two loops
-                        DWORD region1_sample_count = region1sz/bytes_per_sample;
-                        int16_t* sample_out = reinterpret_cast<int16_t*>(region1);
-                        for (DWORD sample_i = 0; sample_i < region1sz; ++sample_i) {
-                            int16_t sample_value = (running_sample_index / half_square_wave_period % 2) ? tone_volume : -tone_volume;
-                            *sample_out++ = sample_value;
-                            *sample_out++ = sample_value;
-                            running_sample_index++;
-                        }
-                        DWORD region2_sample_count = region2sz/bytes_per_sample;
-                        sample_out = reinterpret_cast<int16_t*>(region2);
-                        if (region2) {
-                            for (DWORD sample_i = 0; sample_i < region1sz; ++sample_i) {
-                                int16_t sample_value = (running_sample_index / half_square_wave_period % 2) ? tone_volume : -tone_volume;
-                                *sample_out++ = sample_value;
-                                *sample_out++ = sample_value;
-                                running_sample_index++;
-                            }
-                        }
-                        glob_secondary_buffer->Unlock(region1, region1sz, region2, region2sz);
-                    }
+                    win32_fill_sound_buffer(sound_output, byte_to_lock, bytes_to_write);
                 }
 
                 Win32WindowDimension dimension = win32_get_window_dimension(window);
