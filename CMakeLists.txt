@@ -16,8 +16,12 @@ add_executable(handmade_hero_app WIN32 ${MAIN_APP_SOURCES})
 set_property(TARGET handmade_hero_app PROPERTY CXX_STANDARD 17)
 target_include_directories(handmade_hero_app
                            PRIVATE ${PROJECT_BINARY_DIR})
+
 if(MSVC)
     target_compile_options(handmade_hero_app
         PRIVATE -wd28251    # disable SAL annotation warnings
         PRIVATE /MP)        # enable multiprocessor compilation
+    target_link_libraries(handmade_hero_app
+                          PRIVATE Xinput.lib
+                          PRIVATE Winmm.lib)
 endif()
