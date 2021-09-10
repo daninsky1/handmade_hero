@@ -5,6 +5,7 @@
 
 #include <windows.h>
 #include <Xinput.h>         // XBox joystick controller
+#include <dsound.h>
 #include <joystickapi.h>    // Generic joystick controller
 
 #include "handmade_hero_config.h"
@@ -14,7 +15,7 @@
 typedef X_INPUT_GET_STATE(x_input_get_state);
 X_INPUT_GET_STATE(XInputGetStateStub)
 {
-    return(ERROR_DEVICE_NOT_CONNECTED);
+    return ERROR_DEVICE_NOT_CONNECTED;
 }
 static x_input_get_state* XInputGetState_ = XInputGetStateStub;
 #define XInputGetState XInputGetState_
@@ -24,18 +25,102 @@ static x_input_get_state* XInputGetState_ = XInputGetStateStub;
 typedef X_INPUT_SET_STATE(x_input_set_state);
 X_INPUT_SET_STATE(XInputSetStateStub)
 {
-    return(ERROR_DEVICE_NOT_CONNECTED);
+    return ERROR_DEVICE_NOT_CONNECTED;
 }
 static x_input_set_state* XInputSetState_ = XInputSetStateStub;
 #define XInputSetState XInputSetState_
 
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPGUID lpGuid, LPDIRECTSOUND* ppDS, LPUNKNOWN  pUnkOuter);
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
+
 static void win32_load_xinput()
 {
-    HMODULE xinput_library = LoadLibraryA("xinput1_3.dll");
+    HMODULE xinput_library = LoadLibraryA("xinput1_4.dll");
+    if (!xinput_library) {
+        // TODO(casey): Diagnostic
+        xinput_library = LoadLibraryA("xinput1_3.dll");
+    }
+    
     if (xinput_library) {
          XInputGetState = reinterpret_cast<x_input_get_state*>(GetProcAddress(xinput_library, "XInputGetState"));
+         if (!XInputGetState) XInputGetState = XInputGetStateStub;
          XInputSetState = reinterpret_cast<x_input_set_state*>(GetProcAddress(xinput_library, "XInputSetState"));
+         if (!XInputSetState) XInputSetState = XInputSetStateStub;
+         // TODO(casey): Diagnostic
     }
+    else {
+        // TODO(casey): Diagnostic
+    }
+}
+
+static void win32_init_dsound(HWND window, int32_t samples_per_second, int32_t buffer_size)
+{
+    // NOTE(casey): Load the library
+    HMODULE DSoundLibrary = LoadLibraryA("dsound.dll");
+
+    if (DSoundLibrary) {
+        // NOTE(casey): Get a DirectSound object! - cooperative
+        direct_sound_create* DirectSoundCreate = reinterpret_cast<direct_sound_create*>(GetProcAddress(DSoundLibrary, "DirectSoundCreate"));
+        // TODO(casey): Double-check that this works on XP - DirectSound8 or 7??
+        LPDIRECTSOUND DirectSound;
+        if (DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound, 0))) {
+            WAVEFORMATEX wave_format = {};
+            wave_format.wFormatTag = WAVE_FORMAT_PCM;
+            wave_format.nChannels = 2;
+            wave_format.nSamplesPerSec = samples_per_second;
+            wave_format.wBitsPerSample = 16;
+            wave_format.nBlockAlign = wave_format.nChannels * wave_format.wBitsPerSample / 8;
+            wave_format.nAvgBytesPerSec = wave_format.nSamplesPerSec * wave_format.nBlockAlign;
+            wave_format.cbSize = 0;
+            
+
+            if (SUCCEEDED(DirectSound->SetCooperativeLevel(window, DSSCL_PRIORITY))) {
+                DSBUFFERDESC buffer_description = {};
+                buffer_description.dwSize = sizeof(buffer_description);
+                buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER;
+
+                // NOTE(casey): "Create" a primary buffer
+                // TODO(casey): DSBCAPS_GLOBALFOCUS
+                LPDIRECTSOUNDBUFFER primary_buffer;
+                if (SUCCEEDED(DirectSound->CreateSoundBuffer(&buffer_description, &primary_buffer, 0))) {
+
+                    if (SUCCEEDED(primary_buffer->SetFormat(&wave_format))) {
+                        // TODO(casey): We have finally set the format!
+                        OutputDebugStringA("Primary buffer format was set.\n");
+                    }
+                    else {
+                        // TODO(casey): Diagnostic
+                    }
+                }
+                else {
+                    // TODO(casey): Diagnostic
+                }
+            }
+            else {
+                // TODO(casey): Diagnostic
+            }
+
+            // TODO(casey): DSBCAPD_GETCURRENTPOSITION2
+            DSBUFFERDESC buffer_description = {};
+            buffer_description.dwSize = sizeof(buffer_description);
+            buffer_description.dwFlags = 0;
+            buffer_description.dwBufferBytes = buffer_size;
+            buffer_description.lpwfxFormat = &wave_format;
+
+
+            LPDIRECTSOUNDBUFFER secondary_buffer;
+            if (SUCCEEDED(DirectSound->CreateSoundBuffer(&buffer_description, &secondary_buffer, 0))) {
+                OutputDebugStringA("Primary buffer format was created successfully.\n");
+            }
+        }
+        else {
+            // TODO(casey): Diagnostic
+        }
+    }
+    else {
+        // TODO(casey): Diagnostic
+    }
+
 }
 
 struct Win32OffscreenBuffer {
@@ -161,7 +246,7 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
     {
         uint32_t vk_code = w_parameter;
         bool was_down = (l_parameter & (1 << 30)) != 0;
-        bool is_down = (l_parameter & (1 << 31)) == 0;
+        bool is_down = (l_parameter & (1L << 31L)) == 0;
         if (was_down != is_down) {
             if (vk_code == 'W') {
                 OutputDebugString("W\n");
@@ -206,6 +291,10 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
             else if (vk_code == VK_SPACE) {
                 OutputDebugString("SPACE\n");
             }
+            
+            bool altkey_is_down = (l_parameter & (1 << 29)) != 0;
+            if ((vk_code == VK_F4) && altkey_is_down)
+                running = false;
         }
         break;
     }
@@ -273,6 +362,8 @@ int CALLBACK WinMain(HINSTANCE instance,
         if (window) {
             running = true;
             MSG message;
+
+            win32_init_dsound(window, 4800, 48000*sizeof(int16_t)*2);
             
             // NOTE(daniel): GENERIC JOYSTICK CONTROLLER
             // NOTE(daniel): eventually replace joystick input with DirectInput
@@ -295,6 +386,9 @@ int CALLBACK WinMain(HINSTANCE instance,
             if (joyGetPosEx(JOYSTICKID1, &joyinfoex) != JOYERR_UNPLUGGED) {
                 joystick_id = JOYSTICKID1;
                 joyGetDevCaps(joystick_id, &joy_capabilities, sizeof(joy_capabilities));
+            }
+            else {
+                return JOYERR_UNPLUGGED;
             }
 
 
