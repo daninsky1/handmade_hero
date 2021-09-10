@@ -10,6 +10,30 @@
 
 #include "handmade_hero_config.h"
 
+struct Win32OffscreenBuffer {
+    // NOTE(casey): Pixels are always 32-bits wide, memory order BB GG RR XX
+    BITMAPINFO info;
+    void* memory;
+    int width;
+    int height;
+    int bytes_per_pixel;
+};
+
+struct Win32WindowDimension {
+    int width;
+    int height;
+};
+
+// TODO:(casey): This is a global for now
+static bool glob_running;
+static Win32OffscreenBuffer glob_backbuffer;
+static LPDIRECTSOUNDBUFFER glob_secondary_buffer;
+
+// NOTE(daniel): I got to make globally available for windows procedure get access
+// to this
+static int xoff = 0;
+static int yoff = 0;
+
 // NOTE(casey): XInputGetState
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
 typedef X_INPUT_GET_STATE(x_input_get_state);
@@ -106,11 +130,8 @@ static void win32_init_dsound(HWND window, int32_t samples_per_second, int32_t b
             buffer_description.dwFlags = 0;
             buffer_description.dwBufferBytes = buffer_size;
             buffer_description.lpwfxFormat = &wave_format;
-
-
-            LPDIRECTSOUNDBUFFER secondary_buffer;
-            if (SUCCEEDED(DirectSound->CreateSoundBuffer(&buffer_description, &secondary_buffer, 0))) {
-                OutputDebugStringA("Primary buffer format was created successfully.\n");
+            if (SUCCEEDED(DirectSound->CreateSoundBuffer(&buffer_description, &glob_secondary_buffer, 0))) {
+                OutputDebugStringA("Secondary buffer format was created successfully.\n");
             }
         }
         else {
@@ -122,29 +143,6 @@ static void win32_init_dsound(HWND window, int32_t samples_per_second, int32_t b
     }
 
 }
-
-struct Win32OffscreenBuffer {
-    // NOTE(casey): Pixels are always 32-bits wide, memory order BB GG RR XX
-    BITMAPINFO info;
-    void* memory;
-    int width;
-    int height;
-    int bytes_per_pixel;
-};
-
-// TODO:(casey): This is a global for now
-static bool running;
-static Win32OffscreenBuffer global_backbuffer;
-
-struct Win32WindowDimension {
-    int width;
-    int height;
-};
-
-// NOTE(daniel): I got to make globally available for windows procedure get access
-// to this
-static int xoff = 0;
-static int yoff = 0;
 
 static Win32WindowDimension win32_get_window_dimension(HWND window)
 {
@@ -205,9 +203,10 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
     // TODO(casey): Probably clear this to black
 }
 
-static void win32_display_buffer_in_window(HDC device_context,
-                                           int window_width, int window_height,
-                                           Win32OffscreenBuffer& buffer)
+static void win32_display_buffer_in_window(Win32OffscreenBuffer& buffer,
+                                           HDC device_context,
+                                           int window_width, int window_height)
+                                           
 {
     // TODO:(casey): Aspect ration correction
     StretchDIBits(device_context,
@@ -234,12 +233,12 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
     }
     case WM_CLOSE:
         // TODO:(casey): Handle this with a message to the user?
-        running = false;
+        glob_running = false;
         OutputDebugString("WM_CLOSE\n");
         break;
     case WM_DESTROY:
         // TODO(casey): Handle this as an error - recreate window?
-        running = false;
+        glob_running = false;
         break;
     case WM_SYSKEYDOWN: case WM_SYSKEYUP:
     case WM_KEYDOWN:    case WM_KEYUP:
@@ -294,7 +293,7 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
             
             bool altkey_is_down = (l_parameter & (1 << 29)) != 0;
             if ((vk_code == VK_F4) && altkey_is_down)
-                running = false;
+                glob_running = false;
         }
         break;
     }
@@ -308,7 +307,7 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
         LONG height = paint.rcPaint.bottom - paint.rcPaint.top;
 
         Win32WindowDimension dimension = win32_get_window_dimension(window);
-        win32_display_buffer_in_window(device_context, dimension.width, dimension.height, global_backbuffer);
+        win32_display_buffer_in_window(glob_backbuffer, device_context, dimension.width, dimension.height);
         static DWORD color = WHITENESS;
 
         EndPaint(window, &paint);
@@ -331,7 +330,7 @@ int CALLBACK WinMain(HINSTANCE instance,
     // NOTE(daniel): Resolution
     int w = 1280;
     int h = 720;
-    win32_resize_dib_section(global_backbuffer, w, h);
+    win32_resize_dib_section(glob_backbuffer, w, h);
     WNDCLASSA window_class = {};
     
     // TODO:(casey): Check if HREDRAW/VREDRAW/OWNDC still matter
@@ -360,11 +359,24 @@ int CALLBACK WinMain(HINSTANCE instance,
             nullptr
         );
         if (window) {
-            running = true;
-            MSG message;
+            // NOTE(casey): Since we specified CS_OWNDC, we can just
+            // get one device context and use it forever because we
+            // are not sharing it with anyone
+            HDC device_context = GetDC(window);
 
-            win32_init_dsound(window, 4800, 48000*sizeof(int16_t)*2);
-            
+            int sample_per_second = 48000;
+            int hz = 128;               // NOTE(daniel): Note A2
+            int16_t tone_volume = 8000;
+            uint32_t running_sample_index = 0;
+            int square_wave_period = sample_per_second/hz;
+            int half_square_wave_period = square_wave_period / 2;
+            int bytes_per_sample = sizeof(int16_t) * 2;
+            int secondary_buffer_size = sample_per_second * bytes_per_sample;
+
+            win32_init_dsound(window, sample_per_second, secondary_buffer_size);
+            glob_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
+
+
             // NOTE(daniel): GENERIC JOYSTICK CONTROLLER
             // NOTE(daniel): eventually replace joystick input with DirectInput
             JOYINFOEX joyinfoex;
@@ -392,10 +404,12 @@ int CALLBACK WinMain(HINSTANCE instance,
             }
 
 
-            while (running) {
+            glob_running = true;
+            while (glob_running) {
+                MSG message;
                 // NOTE(daniel): Flush queue
                 while (PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
-                    if (message.message == WM_QUIT) running = false;
+                    if (message.message == WM_QUIT) glob_running = false;
                     TranslateMessage(&message);
                     DispatchMessage(&message);
                 }
@@ -472,14 +486,58 @@ int CALLBACK WinMain(HINSTANCE instance,
                     xoff += s_generic_gpad_lanalogx >> 12;
                     yoff += s_generic_gpad_lanalogy >> 12;
                 }
+                render_test_gradient(glob_backbuffer, xoff, yoff);
 
+                DWORD play_cursor_pos;
+                DWORD write_cursor_pos;
+                if (SUCCEEDED(glob_secondary_buffer->GetCurrentPosition(&play_cursor_pos, &write_cursor_pos))) {
+                    // NOTE(casey): DirectSound output test
+                    DWORD byte_to_lock = running_sample_index * bytes_per_sample % secondary_buffer_size;
+                    DWORD bytes_to_write;
+                    if (byte_to_lock > play_cursor_pos) {
+                        bytes_to_write = secondary_buffer_size - byte_to_lock;
+                        bytes_to_write += play_cursor_pos;
+                    }
+                    else {
+                        bytes_to_write = play_cursor_pos - byte_to_lock;
+                    }
 
-                render_test_gradient(global_backbuffer, xoff, yoff);
+                    // TODO(casey): More strenuous test!
+                    LPVOID region1;
+                    DWORD region1sz;
+                    LPVOID region2;
+                    DWORD region2sz;
 
-                HDC device_context = GetDC(window);
+                    if (SUCCEEDED(glob_secondary_buffer->Lock(byte_to_lock, bytes_to_write,
+                                                              &region1, &region1sz,
+                                                              &region2, &region2sz,
+                                                              0))) {
+                        // TODO(casey): assert that region1sz/region2sz is valid
+                        // TODO(casey): collapse these two loops
+                        DWORD region1_sample_count = region1sz/bytes_per_sample;
+                        int16_t* sample_out = reinterpret_cast<int16_t*>(region1);
+                        for (DWORD sample_i = 0; sample_i < region1sz; ++sample_i) {
+                            int16_t sample_value = (running_sample_index / half_square_wave_period % 2) ? tone_volume : -tone_volume;
+                            *sample_out++ = sample_value;
+                            *sample_out++ = sample_value;
+                            running_sample_index++;
+                        }
+                        DWORD region2_sample_count = region2sz/bytes_per_sample;
+                        sample_out = reinterpret_cast<int16_t*>(region2);
+                        if (region2) {
+                            for (DWORD sample_i = 0; sample_i < region1sz; ++sample_i) {
+                                int16_t sample_value = (running_sample_index / half_square_wave_period % 2) ? tone_volume : -tone_volume;
+                                *sample_out++ = sample_value;
+                                *sample_out++ = sample_value;
+                                running_sample_index++;
+                            }
+                        }
+                        glob_secondary_buffer->Unlock(region1, region1sz, region2, region2sz);
+                    }
+                }
+
                 Win32WindowDimension dimension = win32_get_window_dimension(window);
-                win32_display_buffer_in_window(device_context, dimension.width, dimension.height, global_backbuffer);
-                ReleaseDC(window, device_context);
+                win32_display_buffer_in_window(glob_backbuffer, device_context, dimension.width, dimension.height);
             }
         }
         else {
