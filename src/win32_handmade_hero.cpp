@@ -1,3 +1,25 @@
+/*
+* TODO(casey): THIS IS NOT A FINAL PLATFORM LAYER!!!
+* 
+* Saved game location
+* Getting a handle to our own executable file
+* Asset loading path
+* Threading (launch a thread)
+* Raw Input (support for multiple keyboards)
+* Sleep/timeBeginPrtiod
+* ClipCursor() (for multimonitor support)
+* Fullscreen support
+* WM_SETCURSOR (control cursor visibility)
+* QueryCancelAutoplay
+* WM_ACTIVATEAPP (for when we are not the active applicatioon)
+* Blit speed improvements (BitBlt)
+* Hardware acceleration (OpenGL or Direct3D or BOTH??)
+* GetKeyboardLayout (for French keyboards, international WASD support)
+* 
+* Just a partial list of stuff!!
+*/
+
+
 #define _USE_MATH_DEFINES
 #include <iostream>
 #include <string>
@@ -9,6 +31,8 @@
 // TODO(casey): Implement sine ourselves
 #include <cmath>
 
+#include "handmade_hero.h"[]
+#include "handmade_hero.cpp"
 
 #include <windows.h>
 #include <Xinput.h>         // XBox joystick controller
@@ -23,7 +47,7 @@ struct Win32OffscreenBuffer {
     void* memory;
     int width;
     int height;
-    int bytes_per_pixel;
+    int pitch;
 };
 
 struct Win32WindowDimension {
@@ -162,28 +186,6 @@ static Win32WindowDimension win32_get_window_dimension(HWND window)
     return result;
 }
 
-static void render_test_gradient(Win32OffscreenBuffer& buffer, int xoff, int yoff)
-{
-    int w = buffer.width;
-    int h = buffer.height;
-    int pitch = w * buffer.bytes_per_pixel;
-    uint8_t* row = static_cast<uint8_t*>(buffer.memory);
-    uint32_t* pixel = static_cast<uint32_t*>(buffer.memory);
-
-    for (int y = 0; y < buffer.height; ++y) {
-        for (int x = 0; x < buffer.width; ++x) {
-            // pixel int memory: BB GG RR XX
-            // LITTLE ENDIAN ARCHITECTURE
-            // Windows invert pixel on registers
-            uint8_t blue= x + xoff;
-            uint8_t green = y + yoff;
-            
-            *pixel++ = (green << 8) | blue;
-        }
-        row += pitch;
-    }
-}
-
 static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
 {
     // TODO(casey): Bulletproof this.
@@ -195,7 +197,7 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
 
     buffer.width = w;
     buffer.height = h;
-    buffer.bytes_per_pixel = 4;
+    buffer.pitch = 4;
 
     buffer.info.bmiHeader.biSize = sizeof(buffer.info.bmiHeader);
     buffer.info.bmiHeader.biWidth = buffer.width;
@@ -204,7 +206,7 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = BI_RGB;
 
-    int bitmap_memory_sz = buffer.width * buffer.height * buffer.bytes_per_pixel;
+    int bitmap_memory_sz = buffer.width * buffer.height * buffer.pitch;
     buffer.memory = VirtualAlloc(0, bitmap_memory_sz, MEM_COMMIT, PAGE_READWRITE);
 
     // TODO(casey): Probably clear this to black
@@ -331,12 +333,14 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
 
 struct Win32SoundOutput {
     int sample_per_second;
-    int hz;               // NOTE(daniel): Note A2
+    int tone_hz;               // NOTE(daniel): Note A2
     int16_t tone_volume;
     uint32_t running_sample_index;
     int wave_period;
     int bytes_per_sample;
     int secondary_buffer_size;
+    float tsine;
+    int latency_sample_count;
 };
 
 void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock, DWORD bytes_to_write) {
@@ -355,26 +359,24 @@ void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock,
         DWORD region1_sample_count = region1sz / sound_output.bytes_per_sample;
         int16_t* sample_out = reinterpret_cast<int16_t*>(region1);
         for (DWORD sample_i = 0; sample_i < region1_sample_count; ++sample_i) {
-            float t = 2.0f * M_PI
-                * static_cast<float>(sound_output.running_sample_index)
-                / static_cast<float>(sound_output.wave_period);
-            float sine_value = std::sinf(t);
+            float sine_value = std::sinf(sound_output.tsine);
             int16_t sample_value = static_cast<int16_t>(sine_value * sound_output.tone_volume);
             *sample_out++ = sample_value;
             *sample_out++ = sample_value;
+
+            sound_output.tsine += 2.0f * M_PI * 1.0f / static_cast<float>(sound_output.wave_period);
             sound_output.running_sample_index++;
         }
 
         DWORD region2_sample_count = region2sz / sound_output.bytes_per_sample;
         sample_out = reinterpret_cast<int16_t*>(region2);
         for (DWORD sample_i = 0; sample_i < region2_sample_count; ++sample_i) {
-            float t = 2.0f * M_PI
-                * static_cast<float>(sound_output.running_sample_index)
-                / static_cast<float>(sound_output.wave_period);
-            float sine_value = std::sinf(t);
+            float sine_value = std::sinf(sound_output.tsine);
             int16_t sample_value = static_cast<int16_t>(sine_value * sound_output.tone_volume);
             *sample_out++ = sample_value;
             *sample_out++ = sample_value;
+
+            sound_output.tsine += 2.0f * M_PI * 1.0f / static_cast<float>(sound_output.wave_period);
             sound_output.running_sample_index++;
         }
         glob_secondary_buffer->Unlock(region1, region1sz, region2, region2sz);
@@ -430,16 +432,15 @@ int CALLBACK WinMain(HINSTANCE instance,
             Win32SoundOutput sound_output = {};
 
             sound_output.sample_per_second = 48000;
-            sound_output.hz = 110;
-            sound_output.tone_volume = 16000;
-            sound_output.running_sample_index = 0;
-            sound_output.wave_period = sound_output.sample_per_second / sound_output.hz;
+            sound_output.tone_hz = 110;      // A2
+            sound_output.tone_volume = 8000;
+            sound_output.wave_period = sound_output.sample_per_second / sound_output.tone_hz;
             sound_output.bytes_per_sample = sizeof(int16_t) * 2;
             sound_output.secondary_buffer_size = sound_output.sample_per_second * sound_output.bytes_per_sample;
-
+            sound_output.latency_sample_count = sound_output.sample_per_second / 15;
             
             win32_init_dsound(window, sound_output.sample_per_second, sound_output.secondary_buffer_size);
-            win32_fill_sound_buffer(sound_output, 0, sound_output.secondary_buffer_size);
+            win32_fill_sound_buffer(sound_output, 0, sound_output.latency_sample_count * sound_output.bytes_per_sample);
             glob_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
             bool sound_is_playing = true;
 
@@ -511,8 +512,8 @@ int CALLBACK WinMain(HINSTANCE instance,
                         int16_t gpad_lstickx = pad->sThumbLX;
                         int16_t gpad_lsticky = pad->sThumbLY;
 
-                        xoff += gpad_lstickx >> 12;
-                        yoff += gpad_lsticky >> 12;
+                        xoff += gpad_lstickx / 4096;
+                        yoff += gpad_lsticky / 4096;
                     }
                     else {
                         // NOTE(casey): The controller is not available 
@@ -549,18 +550,24 @@ int CALLBACK WinMain(HINSTANCE instance,
                     uint16_t u_generic_gpad_lanalogy = joyinfoex.dwYpos;
                     int16_t s_generic_gpad_lanalogx = UINT16_MAX / 2 - u_generic_gpad_lanalogx;   // signed values
                     int16_t s_generic_gpad_lanalogy = UINT16_MAX / 2 - u_generic_gpad_lanalogy;
-
-                    /*
-                    std::stringstream ss;
-                    ss << "unsigned x: " << u_generic_gpad_lanalogx << ", y: " << u_generic_gpad_lanalogy
-                        << " | signed x: " << s_generic_gpad_lanalogx << ", y: " << s_generic_gpad_lanalogy << std::endl;
-                    OutputDebugString(ss.str().c_str());
-                    */
                     
-                    xoff += s_generic_gpad_lanalogx >> 12;
-                    yoff += s_generic_gpad_lanalogy >> 12;
+                    xoff += s_generic_gpad_lanalogx / 4096;
+                    yoff += s_generic_gpad_lanalogy / 4096;
+
+                    // A2 - A3
+                    sound_output.tone_hz = 512 + static_cast<int>(256.0f
+                        * 30000.0f
+                        /30000.0f);
+                    sound_output.wave_period = sound_output.sample_per_second / sound_output.tone_hz;
                 }
-                render_test_gradient(glob_backbuffer, xoff, yoff);
+
+                GameOffscreenBuffer buffer = {};
+                buffer.memory = glob_backbuffer.memory;
+                buffer.width = glob_backbuffer.width;
+                buffer.height = glob_backbuffer.height;
+                buffer.pitch = glob_backbuffer.pitch;
+
+                game_update_and_render(buffer, xoff, yoff);
 
                 DWORD play_cursor_pos;
                 DWORD write_cursor_pos;
@@ -569,18 +576,19 @@ int CALLBACK WinMain(HINSTANCE instance,
                     DWORD byte_to_lock = sound_output.running_sample_index
                         * sound_output.bytes_per_sample
                         % sound_output.secondary_buffer_size;
+                    DWORD target_cursor = play_cursor_pos
+                        + sound_output.latency_sample_count
+                        * sound_output.bytes_per_sample
+                        % sound_output.secondary_buffer_size;
                     DWORD bytes_to_write = 0;
                     // TODO(casey): Change this to using a lower latency offset from the playcursor
-                    // when we actually start havind sound effects.
-                    if (byte_to_lock == play_cursor_pos) {
-                        
-                    }
-                    else if (byte_to_lock > play_cursor_pos) {
+                    // when we actually start having sound effects.
+                    if (byte_to_lock > target_cursor) {
                         bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
-                        bytes_to_write += play_cursor_pos;
+                        bytes_to_write += target_cursor;
                     }
                     else {
-                        bytes_to_write = play_cursor_pos - byte_to_lock;
+                        bytes_to_write = target_cursor - byte_to_lock;
                     }
 
                     win32_fill_sound_buffer(sound_output, byte_to_lock, bytes_to_write);
@@ -601,18 +609,19 @@ int CALLBACK WinMain(HINSTANCE instance,
                 int32_t msec_per_frame = static_cast<int32_t>(1000 * counter_elapsed / perf_count_frequency);    // milissecond per frame
                 int32_t fps = static_cast<int32_t>(perf_count_frequency / counter_elapsed);
                 int32_t mcpf = static_cast<int32_t>(cycles_elapsed / (1000 * 1000));        // Mega Cycles Per Frame
-                float msec_per_framef = 1000.0f*static_cast<float>(counter_elapsed) / static_cast<float>(perf_count_frequency);    // milissecond per frame
-                float fpsf = static_cast<float>(perf_count_frequency) / static_cast<float>(counter_elapsed);
-                float mcpff = static_cast<float>(cycles_elapsed)/(1000.0f*1000.0f);        // Mega Cycles Per Frame
-
+                double msec_per_framef = 1000.0*static_cast<double>(counter_elapsed) / static_cast<double>(perf_count_frequency);    // milissecond per frame
+                double fpsf = static_cast<double>(perf_count_frequency) / static_cast<double>(counter_elapsed);
+                double mcpff = static_cast<double>(cycles_elapsed)/(1000.0*1000.0);        // Mega Cycles Per Frame
+#if 0
                 char buffer[256];
                 char bufferf[256];
                 wsprintf(buffer, "%dmsec/d, %dfps, %dmcpf - \n", msec_per_frame, fps, mcpf);
                 sprintf_s(bufferf, sizeof(bufferf), "%.02fmsec/f, %.02ffps, %.02fmcpf - \n", msec_per_framef, fpsf, mcpff);
                 OutputDebugStringA(bufferf);
-
+#endif
                 last_count = end_count;
                 last_cycle_count = end_cycle_count;
+
             }
         }
         else {
