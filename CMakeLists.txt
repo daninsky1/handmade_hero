@@ -11,13 +11,16 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(MAIN_APP_SOURCES src/main.cpp)
+set(MAIN_APP_SOURCES src/win32_handmade_hero.cpp
+    src/handmade_hero.cpp src/handmade_hero.h)
 add_executable(handmade_hero_app WIN32 ${MAIN_APP_SOURCES})
 set_property(TARGET handmade_hero_app PROPERTY CXX_STANDARD 17)
 target_include_directories(handmade_hero_app
                            PRIVATE ${PROJECT_BINARY_DIR})
 
 if(MSVC)
+    set_target_properties(handmade_hero_app PROPERTIES
+                          VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/data/")
     target_compile_options(handmade_hero_app
         PRIVATE -wd28251    # disable SAL annotation warnings
         PRIVATE /MP)        # enable multiprocessor compilation
