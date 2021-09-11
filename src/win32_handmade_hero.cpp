@@ -92,6 +92,9 @@ static void win32_load_xinput()
 {
     HMODULE xinput_library = LoadLibraryA("xinput1_4.dll");
     if (!xinput_library) {
+        xinput_library = LoadLibraryA("xinput9_1_0.dll");
+    }
+    if (!xinput_library) {
         // TODO(casey): Diagnostic
         xinput_library = LoadLibraryA("xinput1_3.dll");
     }
@@ -324,7 +327,7 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
     }
     default:
         //OutputDebugString("default\n");
-        result = DefWindowProc(window, message, w_parameter, l_parameter);
+        result = DefWindowProcA(window, message, w_parameter, l_parameter);
         break;
     }
 
@@ -437,7 +440,7 @@ int CALLBACK WinMain(HINSTANCE instance,
             sound_output.wave_period = sound_output.sample_per_second / sound_output.tone_hz;
             sound_output.bytes_per_sample = sizeof(int16_t) * 2;
             sound_output.secondary_buffer_size = sound_output.sample_per_second * sound_output.bytes_per_sample;
-            sound_output.latency_sample_count = sound_output.sample_per_second / 15;
+            sound_output.latency_sample_count = sound_output.sample_per_second / 16;      // BUG
             
             win32_init_dsound(window, sound_output.sample_per_second, sound_output.secondary_buffer_size);
             win32_fill_sound_buffer(sound_output, 0, sound_output.latency_sample_count * sound_output.bytes_per_sample);
@@ -512,6 +515,10 @@ int CALLBACK WinMain(HINSTANCE instance,
                         int16_t gpad_lstickx = pad->sThumbLX;
                         int16_t gpad_lsticky = pad->sThumbLY;
 
+                        // TODO(casey): We will do deadzone handling later using
+                        // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
+                        // XINPUT_GAMEPAD_RIGTH_THUMB_DEADZONE
+
                         xoff += gpad_lstickx / 4096;
                         yoff += gpad_lsticky / 4096;
                     }
@@ -555,8 +562,8 @@ int CALLBACK WinMain(HINSTANCE instance,
                     yoff += s_generic_gpad_lanalogy / 4096;
 
                     // A2 - A3
-                    sound_output.tone_hz = 512 + static_cast<int>(256.0f
-                        * 30000.0f
+                    sound_output.tone_hz = 440 + static_cast<int>(110.0f
+                        * static_cast<float>(s_generic_gpad_lanalogy)
                         /30000.0f);
                     sound_output.wave_period = sound_output.sample_per_second / sound_output.tone_hz;
                 }
@@ -576,9 +583,9 @@ int CALLBACK WinMain(HINSTANCE instance,
                     DWORD byte_to_lock = sound_output.running_sample_index
                         * sound_output.bytes_per_sample
                         % sound_output.secondary_buffer_size;
-                    DWORD target_cursor = play_cursor_pos
+                    DWORD target_cursor = (play_cursor_pos
                         + sound_output.latency_sample_count
-                        * sound_output.bytes_per_sample
+                        * sound_output.bytes_per_sample)
                         % sound_output.secondary_buffer_size;
                     DWORD bytes_to_write = 0;
                     // TODO(casey): Change this to using a lower latency offset from the playcursor
