@@ -3,7 +3,12 @@
 #include <string>
 #include <sstream>
 #include <cstdint>
+
+#include <stdio.h>
+
+// TODO(casey): Implement sine ourselves
 #include <cmath>
+
 
 #include <windows.h>
 #include <Xinput.h>         // XBox joystick controller
@@ -380,6 +385,10 @@ int CALLBACK WinMain(HINSTANCE instance,
                      HINSTANCE, LPSTR lpCmdLine,
                      int nCmdShow)
 {
+    LARGE_INTEGER perf_count_frequency_result;
+    QueryPerformanceFrequency(&perf_count_frequency_result);
+    int64_t perf_count_frequency = perf_count_frequency_result.QuadPart;
+
     win32_load_xinput();
     // NOTE(daniel): Resolution
     int w = 1280;
@@ -461,8 +470,13 @@ int CALLBACK WinMain(HINSTANCE instance,
                 return JOYERR_UNPLUGGED;
             }
 
-
             glob_running = true;
+
+            LARGE_INTEGER last_count;
+            QueryPerformanceCounter(&last_count);
+
+            uint64_t last_cycle_count = __rdtsc();
+
             while (glob_running) {
                 MSG message;
                 // NOTE(daniel): Flush queue
@@ -536,10 +550,12 @@ int CALLBACK WinMain(HINSTANCE instance,
                     int16_t s_generic_gpad_lanalogx = UINT16_MAX / 2 - u_generic_gpad_lanalogx;   // signed values
                     int16_t s_generic_gpad_lanalogy = UINT16_MAX / 2 - u_generic_gpad_lanalogy;
 
+                    /*
                     std::stringstream ss;
                     ss << "unsigned x: " << u_generic_gpad_lanalogx << ", y: " << u_generic_gpad_lanalogy
                         << " | signed x: " << s_generic_gpad_lanalogx << ", y: " << s_generic_gpad_lanalogy << std::endl;
                     OutputDebugString(ss.str().c_str());
+                    */
                     
                     xoff += s_generic_gpad_lanalogx >> 12;
                     yoff += s_generic_gpad_lanalogy >> 12;
@@ -554,7 +570,8 @@ int CALLBACK WinMain(HINSTANCE instance,
                         * sound_output.bytes_per_sample
                         % sound_output.secondary_buffer_size;
                     DWORD bytes_to_write = 0;
-                    // TODO(casey): We need a more accurate check than byte_to_lock == play_cursor_pos
+                    // TODO(casey): Change this to using a lower latency offset from the playcursor
+                    // when we actually start havind sound effects.
                     if (byte_to_lock == play_cursor_pos) {
                         
                     }
@@ -571,6 +588,31 @@ int CALLBACK WinMain(HINSTANCE instance,
 
                 Win32WindowDimension dimension = win32_get_window_dimension(window);
                 win32_display_buffer_in_window(glob_backbuffer, device_context, dimension.width, dimension.height);
+
+                uint64_t end_cycle_count = __rdtsc();
+
+                LARGE_INTEGER end_count;
+                QueryPerformanceCounter(&end_count);
+
+
+                // TODO(casey): Display the value here
+                uint64_t cycles_elapsed = end_cycle_count - last_cycle_count;
+                int64_t counter_elapsed = end_count.QuadPart - last_count.QuadPart;
+                int32_t msec_per_frame = static_cast<int32_t>(1000 * counter_elapsed / perf_count_frequency);    // milissecond per frame
+                int32_t fps = static_cast<int32_t>(perf_count_frequency / counter_elapsed);
+                int32_t mcpf = static_cast<int32_t>(cycles_elapsed / (1000 * 1000));        // Mega Cycles Per Frame
+                float msec_per_framef = 1000.0f*static_cast<float>(counter_elapsed) / static_cast<float>(perf_count_frequency);    // milissecond per frame
+                float fpsf = static_cast<float>(perf_count_frequency) / static_cast<float>(counter_elapsed);
+                float mcpff = static_cast<float>(cycles_elapsed)/(1000.0f*1000.0f);        // Mega Cycles Per Frame
+
+                char buffer[256];
+                char bufferf[256];
+                wsprintf(buffer, "%dmsec/d, %dfps, %dmcpf - \n", msec_per_frame, fps, mcpf);
+                sprintf_s(bufferf, sizeof(bufferf), "%.02fmsec/f, %.02ffps, %.02fmcpf - \n", msec_per_framef, fpsf, mcpff);
+                OutputDebugStringA(bufferf);
+
+                last_count = end_count;
+                last_cycle_count = end_cycle_count;
             }
         }
         else {
