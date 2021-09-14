@@ -27,6 +27,7 @@
 #include <cstdint>
 
 #include <stdio.h>
+#include <malloc.h>
 
 // TODO(casey): Implement sine ourselves
 #include <cmath>
@@ -346,7 +347,41 @@ struct Win32SoundOutput {
     int latency_sample_count;
 };
 
-void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock, DWORD bytes_to_write) {
+void win32_clear_sound_buffer(Win32SoundOutput& sound_output)
+{
+    // TODO(casey): More strenuous test!
+    // TODO(casey): Switch to sine wave
+    LPVOID region1;
+    DWORD region1sz;
+    LPVOID region2;
+    DWORD region2sz;
+
+    if (SUCCEEDED(glob_secondary_buffer->Lock(0, sound_output.secondary_buffer_size,
+        &region1, &region1sz,
+        &region2, &region2sz, 0))) {
+        // TODO(casey): assert that region1sz/region2sz is valid
+        // TODO(casey): collapse these two loops
+        
+        uint8_t* dest_sample = reinterpret_cast<uint8_t*>(region1);
+        
+        for (DWORD bytes_i = 0; bytes_i < region1sz; ++bytes_i) {
+            *dest_sample++ = 0;
+        }
+
+        if (region2) {
+            dest_sample = reinterpret_cast<uint8_t*>(region2);
+            for (DWORD bytes_i = 0; bytes_i < region1sz; ++bytes_i) {
+                *dest_sample++ = 0;
+            }
+        }
+
+        glob_secondary_buffer->Unlock(region1, region1sz, region2, region2sz);
+    }
+}
+
+void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock, DWORD bytes_to_write,
+    GameSoundOutputBuffer& source_buffer)
+{
     // TODO(casey): More strenuous test!
     // TODO(casey): Switch to sine wave
     LPVOID region1;
@@ -360,27 +395,24 @@ void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock,
         // TODO(casey): assert that region1sz/region2sz is valid
         // TODO(casey): collapse these two loops
         DWORD region1_sample_count = region1sz / sound_output.bytes_per_sample;
-        int16_t* sample_out = reinterpret_cast<int16_t*>(region1);
+        int16_t* dest_sample = reinterpret_cast<int16_t*>(region1);
+        int16_t* source_sample = source_buffer.samples;
         for (DWORD sample_i = 0; sample_i < region1_sample_count; ++sample_i) {
             float sine_value = std::sinf(sound_output.tsine);
             int16_t sample_value = static_cast<int16_t>(sine_value * sound_output.tone_volume);
-            *sample_out++ = sample_value;
-            *sample_out++ = sample_value;
+            *dest_sample++ = *source_sample++;
+            *dest_sample++ = *source_sample++;
 
-            sound_output.tsine += 2.0f * M_PI * 1.0f / static_cast<float>(sound_output.wave_period);
-            sound_output.running_sample_index++;
+            ++sound_output.running_sample_index;
         }
 
         DWORD region2_sample_count = region2sz / sound_output.bytes_per_sample;
-        sample_out = reinterpret_cast<int16_t*>(region2);
+        dest_sample = reinterpret_cast<int16_t*>(region2);
         for (DWORD sample_i = 0; sample_i < region2_sample_count; ++sample_i) {
-            float sine_value = std::sinf(sound_output.tsine);
-            int16_t sample_value = static_cast<int16_t>(sine_value * sound_output.tone_volume);
-            *sample_out++ = sample_value;
-            *sample_out++ = sample_value;
+            *dest_sample++ = *source_sample++;
+            *dest_sample++ = *source_sample++;
 
-            sound_output.tsine += 2.0f * M_PI * 1.0f / static_cast<float>(sound_output.wave_period);
-            sound_output.running_sample_index++;
+            ++sound_output.running_sample_index;
         }
         glob_secondary_buffer->Unlock(region1, region1sz, region2, region2sz);
     }
@@ -443,8 +475,12 @@ int CALLBACK WinMain(HINSTANCE instance,
             sound_output.latency_sample_count = sound_output.sample_per_second / 16;      // BUG
             
             win32_init_dsound(window, sound_output.sample_per_second, sound_output.secondary_buffer_size);
-            win32_fill_sound_buffer(sound_output, 0, sound_output.latency_sample_count * sound_output.bytes_per_sample);
+            win32_clear_sound_buffer(sound_output);
             glob_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
+
+
+            glob_running = true;
+
             bool sound_is_playing = true;
 
 
@@ -474,7 +510,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                 return JOYERR_UNPLUGGED;
             }
 
-            glob_running = true;
+            
 
             LARGE_INTEGER last_count;
             QueryPerformanceCounter(&last_count);
@@ -568,26 +604,21 @@ int CALLBACK WinMain(HINSTANCE instance,
                     sound_output.wave_period = sound_output.sample_per_second / sound_output.tone_hz;
                 }
 
-                GameOffscreenBuffer buffer = {};
-                buffer.memory = glob_backbuffer.memory;
-                buffer.width = glob_backbuffer.width;
-                buffer.height = glob_backbuffer.height;
-                buffer.pitch = glob_backbuffer.pitch;
-
-                game_update_and_render(buffer, xoff, yoff);
+                DWORD byte_to_lock;
+                DWORD target_cursor;
+                DWORD bytes_to_write;
 
                 DWORD play_cursor_pos;
                 DWORD write_cursor_pos;
+                bool sound_is_valid = false;
                 if (SUCCEEDED(glob_secondary_buffer->GetCurrentPosition(&play_cursor_pos, &write_cursor_pos))) {
-                    // NOTE(casey): DirectSound output test
-                    DWORD byte_to_lock = sound_output.running_sample_index
+                    byte_to_lock = sound_output.running_sample_index
                         * sound_output.bytes_per_sample
                         % sound_output.secondary_buffer_size;
-                    DWORD target_cursor = (play_cursor_pos
+                    target_cursor = (play_cursor_pos
                         + sound_output.latency_sample_count
                         * sound_output.bytes_per_sample)
                         % sound_output.secondary_buffer_size;
-                    DWORD bytes_to_write = 0;
                     // TODO(casey): Change this to using a lower latency offset from the playcursor
                     // when we actually start having sound effects.
                     if (byte_to_lock > target_cursor) {
@@ -597,8 +628,32 @@ int CALLBACK WinMain(HINSTANCE instance,
                     else {
                         bytes_to_write = target_cursor - byte_to_lock;
                     }
+                    sound_is_valid = true;
+                }
 
-                    win32_fill_sound_buffer(sound_output, byte_to_lock, bytes_to_write);
+
+                // TODO(casey): Pool with bitmap VirtualAlloc
+                int16_t* samples = reinterpret_cast<int16_t*>(
+                    VirtualAlloc(0, sound_output.secondary_buffer_size, MEM_COMMIT, PAGE_READWRITE));
+                GameSoundOutputBuffer sound_buffer = {};
+                sound_buffer.samples_per_second = sound_output.sample_per_second;
+                sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
+                sound_buffer.samples = samples;
+
+                GameOffscreenBuffer buffer = {};
+                buffer.memory = glob_backbuffer.memory;
+                buffer.width = glob_backbuffer.width;
+                buffer.height = glob_backbuffer.height;
+                buffer.pitch = glob_backbuffer.pitch;
+
+                game_update_and_render(buffer, xoff, yoff, sound_buffer, sound_output.tone_hz);
+
+
+                if (sound_is_valid) {
+                    // NOTE(casey): DirectSound output test
+
+
+                    win32_fill_sound_buffer(sound_output, byte_to_lock, bytes_to_write, sound_buffer);
                 }
 
                 Win32WindowDimension dimension = win32_get_window_dimension(window);

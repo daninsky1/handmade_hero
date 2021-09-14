@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#define _USE_MATH_DEFINES
+#include <cmath>
 /*
 * TODO(casey): services that the platform layer provides to the game
 * 
@@ -22,4 +24,11 @@ struct GameOffscreenBuffer {
     int pitch;
 };
 
-static void game_update_and_render(GameOffscreenBuffer& buffer, int blue_offset, int green_offset);
+struct GameSoundOutputBuffer {
+    int samples_per_second;
+    int sample_count;
+    int16_t* samples;
+};
+
+static void game_update_and_render(GameOffscreenBuffer& buffer, int blue_offset, int green_offset,
+    GameSoundOutputBuffer& sound_buffer, int hz);
