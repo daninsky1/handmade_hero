@@ -3,10 +3,12 @@
 #include <cstdint>
 #define _USE_MATH_DEFINES
 #include <cmath>
+
+#define ARRAY_COUNT(Array) (sizeof(Array) / sizeof((Array)[0]))
+// TODO(casey): swap, min, max .. macros ???
+
 /*
 * TODO(casey): services that the platform layer provides to the game
-* 
-
 */
 
 /*
@@ -30,5 +32,39 @@ struct GameSoundOutputBuffer {
     int16_t* samples;
 };
 
-static void game_update_and_render(GameOffscreenBuffer& buffer, int blue_offset, int green_offset,
-    GameSoundOutputBuffer& sound_buffer, int hz);
+struct GameButtonState{
+    int half_transition;
+    bool ended_down;
+};
+struct GameControllerInput{
+    bool is_analog;
+
+    float startx;
+    float starty;
+
+    float minx;
+    float miny;
+
+    float maxx;
+    float maxy;
+
+    float endx;
+    float endy;
+
+    union {
+        GameButtonState buttons[6];
+        struct {
+            GameButtonState up;
+            GameButtonState down;
+            GameButtonState left;
+            GameButtonState right;
+            GameButtonState left_shoulder;
+            GameButtonState right_shoulder;
+        };
+    };
+};
+struct GameInput {
+    GameControllerInput controllers[4];
+};
+
+static void game_update_and_render(GameInput* input, GameOffscreenBuffer& buffer, GameSoundOutputBuffer& sound_buffer);

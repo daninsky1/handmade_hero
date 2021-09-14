@@ -11,7 +11,8 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(MAIN_APP_SOURCES src/win32_handmade_hero.cpp
+set(MAIN_APP_SOURCES
+    src/win32_handmade_hero.cpp src/win32_handmade_hero.h
     src/handmade_hero.cpp src/handmade_hero.h)
 add_executable(handmade_hero_app WIN32 ${MAIN_APP_SOURCES})
 set_property(TARGET handmade_hero_app PROPERTY CXX_STANDARD 17)

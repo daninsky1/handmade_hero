@@ -35,10 +35,27 @@ static void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff
     }
 }
 
-static void game_update_and_render(GameOffscreenBuffer& buffer, int blue_offset, int green_offset,
-    GameSoundOutputBuffer& sound_buffer, int hz)
+static void game_update_and_render(GameInput* input, GameOffscreenBuffer& buffer, GameSoundOutputBuffer& sound_buffer)
 {
+    int blue_offset = 0;
+    int green_offset = 0;
+    int tone_hz = 110;
+    int tone_volume = 8000;
+
+    GameControllerInput* input0 = &input->controllers[0];
+    if (input0->is_analog) {
+        // NOTE(casey): Use analog movement tuning
+        blue_offset += static_cast<int>(4.0f * input0->endx);
+        tone_hz = 110 + static_cast<int>(128.0f * input0->endy);
+    }
+    else {
+        // NOTE(casey): Use digital movement tuning
+    }
+
+    if (input0->down.ended_down) {
+        green_offset += 1;
+    }
     // TODO(casey): Allow sample offsets here for more robust platform options
-    game_output_sound(sound_buffer, hz);
+    game_output_sound(sound_buffer, tone_hz);
     render_test_gradient(buffer, blue_offset, green_offset);
 }
