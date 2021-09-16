@@ -35,27 +35,40 @@ static void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff
     }
 }
 
-static void game_update_and_render(GameInput* input, GameOffscreenBuffer& buffer, GameSoundOutputBuffer& sound_buffer)
+void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer, GameSoundOutputBuffer& sound_buffer)
 {
-    int blue_offset = 0;
-    int green_offset = 0;
-    int tone_hz = 110;
+    ASSERT(sizeof(GameState) <= memory->permanent_storage_size);
+
+    GameState* game_state = reinterpret_cast<GameState*>(memory->permanent_storage);
+    if (!memory->is_initialized) {
+        char* file_name = __FILE__;
+
+        DEBUGReadFileResult file = DEBUG_platform_read_entire_file(file_name);
+        if (file.content) {
+            DEBUG_platform_write_entire_file("test.txt", file.content_size, file.content);
+            DEBUG_platform_free_file_memory(file.content);
+        }
+        game_state->tone_hz = 110;
+
+        // TODO(casey): This may be more appropriate to do in the pratform layer
+        memory->is_initialized = true;
+    }
     int tone_volume = 8000;
 
     GameControllerInput* input0 = &input->controllers[0];
     if (input0->is_analog) {
         // NOTE(casey): Use analog movement tuning
-        blue_offset += static_cast<int>(4.0f * input0->endx);
-        tone_hz = 110 + static_cast<int>(128.0f * input0->endy);
+        game_state->blue_offset += static_cast<int>(4.0f * input0->endx);
+        game_state->tone_hz = 110 + static_cast<int>(128.0f * input0->endy);
     }
     else {
         // NOTE(casey): Use digital movement tuning
     }
 
     if (input0->down.ended_down) {
-        green_offset += 1;
+        game_state->green_offset += 1;
     }
     // TODO(casey): Allow sample offsets here for more robust platform options
-    game_output_sound(sound_buffer, tone_hz);
-    render_test_gradient(buffer, blue_offset, green_offset);
+    game_output_sound(sound_buffer, game_state->tone_hz);
+    render_test_gradient(buffer, game_state->blue_offset, game_state->green_offset);
 }

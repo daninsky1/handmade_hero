@@ -5,6 +5,7 @@ project(handmade_hero
         LANGUAGES C CXX)
 configure_file(handmade_hero_config.h.in handmade_hero_config.h)
 
+# warnings
 if(MSVC)
     add_compile_options(-W4)
 else()
@@ -21,10 +22,17 @@ target_include_directories(handmade_hero_app
 
 if(MSVC)
     set_target_properties(handmade_hero_app PROPERTIES
-                          VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/data/")
+                          VS_DEBUGGER_WORKING_DIRECTORY $<CONFIG:Debug>:"${CMAKE_SOURCE_DIR}/data/")
     target_compile_options(handmade_hero_app
         PRIVATE -wd28251    # disable SAL annotation warnings
         PRIVATE /MP)        # enable multiprocessor compilation
+    # target definitions
+    target_compile_definitions(handmade_hero_app
+        PRIVATE $<$<CONFIG:Debug>:DEVELOPER_BUILD=1>
+        PRIVATE $<$<CONFIG:Debug>:DEVELOPER_PERFORMANCE=1>)
+    target_compile_definitions(handmade_hero_app
+        PRIVATE $<$<CONFIG:Release>:DEVELOPER_BUILD=0>
+        PRIVATE $<$<CONFIG:Release>:DEVELOPER_PERFORMANCE=0>)
     target_link_libraries(handmade_hero_app
                           PRIVATE Xinput.lib
                           PRIVATE Winmm.lib)
