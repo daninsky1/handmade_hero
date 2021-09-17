@@ -28,7 +28,7 @@
 #define TERABYTES(value) (GIGABYTES(value) * 1024ull)
 #define ARRAY_COUNT(Array) (sizeof(Array) / sizeof((Array)[0]))
 // TODO(casey): swap, min, max .. macros ???
-inline uint32_t safe_truncate_uint64_t(uint64_t value)
+inline uint32_t safe_truncate_int64_t(int64_t value)
 {
     ASSERT(value <= 0xFFFFFFFF);
     uint32_t result = static_cast<uint32_t>(value);
@@ -38,6 +38,9 @@ inline uint32_t safe_truncate_uint64_t(uint64_t value)
 * NOTE(casey): services that the platform layer provides to the game
 */
 #if DEVELOPER_BUILD
+/* IMPORTANT(casey): These are NOT for doing anything in the shipping game = they are
+*  blocking and the write doesn't protect againt lost data!
+*/
 struct DEBUGReadFileResult {
     void* content;
     uint32_t content_size;
@@ -46,6 +49,7 @@ DEBUGReadFileResult DEBUG_platform_read_entire_file(char* filename);
 void DEBUG_platform_free_file_memory(void* memory);
 bool DEBUG_platform_write_entire_file(char* filename, uint32_t memory_size, void* memory);
 #endif
+
 /*
 * NOTE(casey): Services that the game provides to the platforma layer
 * (this may expand in the future - sound on separate thread, etc.)
@@ -62,8 +66,8 @@ struct GameOffscreenBuffer {
 };
 
 struct GameSoundOutputBuffer {
-    int samples_per_second;
-    int sample_count;
+    uint32_t samples_per_second;
+    uint32_t sample_count;
     int16_t* samples;
 };
 
@@ -103,7 +107,7 @@ struct GameInput {
 };
 
 struct GameState {
-    int tone_hz;
+    uint32_t tone_hz;
     int green_offset;
     int blue_offset;
 };

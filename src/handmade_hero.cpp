@@ -1,21 +1,21 @@
 #include "handmade_hero.h"
 
 
-static void game_output_sound(GameSoundOutputBuffer & sound_buffer, int hz)
+static void game_output_sound(GameSoundOutputBuffer & sound_buffer, uint32_t hz)
 {
     static float tsine;
     int16_t tone_volume = 8000;
-    int tone_hz = hz;
-    int wave_period = sound_buffer.samples_per_second / tone_hz;
+    uint32_t tone_hz = hz;
+    uint32_t wave_period = sound_buffer.samples_per_second / tone_hz;
 
     int16_t* sample_out = sound_buffer.samples;
-    for (int sample_i = 0; sample_i < sound_buffer.sample_count; ++sample_i) {
+    for (uint32_t sample_i = 0; sample_i < sound_buffer.sample_count; ++sample_i) {
         float sine_value = std::sinf(tsine);
         int16_t sample_value = static_cast<int16_t>(sine_value * tone_volume);
         *sample_out++ = sample_value;
         *sample_out++ = sample_value;
 
-        tsine += 2.0f * M_PI * 1.0f / static_cast<float>(wave_period);
+        tsine += 2.0f * static_cast<float>(M_PI) * 1.0f / static_cast<float>(wave_period);
     }
 }
 
@@ -26,10 +26,10 @@ static void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff
 
     for (int y = 0; y < buffer.height; ++y) {
         for (int x = 0; x < buffer.width; ++x) {
-            uint8_t blue = x + xoff;
-            uint8_t green = y + yoff;
+            uint8_t blue = static_cast<uint8_t>(x + xoff);
+            uint8_t green = static_cast<uint8_t>(y + yoff);
 
-            *pixel++ = (green << 8) | blue;
+            *pixel++ = static_cast<uint32_t>((green << 8) | blue);
         }
         row += buffer.pitch;
     }
@@ -53,13 +53,12 @@ void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenB
         // TODO(casey): This may be more appropriate to do in the pratform layer
         memory->is_initialized = true;
     }
-    int tone_volume = 8000;
 
     GameControllerInput* input0 = &input->controllers[0];
     if (input0->is_analog) {
         // NOTE(casey): Use analog movement tuning
         game_state->blue_offset += static_cast<int>(4.0f * input0->endx);
-        game_state->tone_hz = 110 + static_cast<int>(128.0f * input0->endy);
+        game_state->tone_hz = 110 + static_cast<uint32_t>(128.0f * input0->endy);
     }
     else {
         // NOTE(casey): Use digital movement tuning

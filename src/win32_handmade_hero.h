@@ -6,12 +6,12 @@
 #include <joystickapi.h>    // Generic joystick controller
 
 struct Win32SoundOutput {
-    int sample_per_second;
+    DWORD sample_per_second;
     uint32_t running_sample_index;
-    int bytes_per_sample;
-    int secondary_buffer_size;
+    DWORD bytes_per_sample;
+    DWORD secondary_buffer_size;
     float tsine;
-    int latency_sample_count;
+    DWORD latency_sample_count;
 };
 
 struct Win32OffscreenBuffer {
