@@ -41,6 +41,7 @@
 static bool glob_running;
 static Win32OffscreenBuffer glob_backbuffer;
 static LPDIRECTSOUNDBUFFER glob_secondary_buffer;
+static int64_t glob_perf_count_frequency;
 
 // NOTE(daniel): I got to make globally available for windows procedure get access
 // to this
@@ -149,12 +150,16 @@ static void win32_load_xinput()
         xinput_library = LoadLibraryA("xinput1_3.dll");
     }
     
+    // TODO(daniel): Check warning 4191
+#pragma warning(disable: 4191)
     if (xinput_library) {
+
          XInputGetState = reinterpret_cast<xinput_get_state*>(GetProcAddress(xinput_library, "XInputGetState"));
          if (!XInputGetState) XInputGetState = XInputGetStateStub;
          XInputSetState = reinterpret_cast<xinput_set_state*>(GetProcAddress(xinput_library, "XInputSetState"));
          if (!XInputSetState) XInputSetState = XInputSetStateStub;
          // TODO(casey): Diagnostic
+#pragma warning(default: 4191)
     }
     else {
         // TODO(casey): Diagnostic
@@ -167,8 +172,11 @@ static void win32_init_dsound(HWND window, DWORD samples_per_second, DWORD buffe
     HMODULE DSoundLibrary = LoadLibraryA("dsound.dll");
 
     if (DSoundLibrary) {
+        // TODO(daniel): Check warning 4191
+#pragma warning(disable: 4191)
         // NOTE(casey): Get a DirectSound object! - cooperative
         direct_sound_create* DirectSoundCreate = reinterpret_cast<direct_sound_create*>(GetProcAddress(DSoundLibrary, "DirectSoundCreate"));
+#pragma warning(disable: 4191)
         // TODO(casey): Double-check that this works on XP - DirectSound8 or 7??
         LPDIRECTSOUND DirectSound;
         if (DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound, 0))) {
@@ -250,7 +258,8 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
 
     buffer.width = w;
     buffer.height = h;
-    buffer.pitch = 4;
+    int byter_per_pixel = 4;
+    buffer.bytes_per_pixel = byter_per_pixel;
 
     buffer.info.bmiHeader.biSize = sizeof(buffer.info.bmiHeader);
     buffer.info.bmiHeader.biWidth = buffer.width;
@@ -259,8 +268,9 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = BI_RGB;
 
-    size_t bitmap_memory_sz = static_cast<size_t>(buffer.width * buffer.height * buffer.pitch);
+    size_t bitmap_memory_sz = static_cast<size_t>(buffer.width * buffer.height * byter_per_pixel);
     buffer.memory = VirtualAlloc(0, bitmap_memory_sz, MEM_COMMIT, PAGE_READWRITE);
+    buffer.pitch = w * byter_per_pixel;
 
     // TODO(casey): Probably clear this to black
 }
@@ -484,10 +494,63 @@ static float win32_process_xinput_stick_value(SHORT value, SHORT deadzone_thresh
 {
     float result = 0;
     if (value < -deadzone_threshold)
-        result = static_cast<float>((value + deadzone_threshold) / (32768.0f - deadzone_threshold));
+        result = static_cast<float>(value + deadzone_threshold) / (32768.0f - static_cast<float>(deadzone_threshold));
     else if (value > deadzone_threshold)
-        result = static_cast<float>((value + deadzone_threshold) / (32768.0f - deadzone_threshold));
+        result = static_cast<float>(value + deadzone_threshold) / (32768.0f - static_cast<float>(deadzone_threshold));
     return result;
+}
+
+inline LARGE_INTEGER win32_get_wall_clock()
+{
+    LARGE_INTEGER result;
+    QueryPerformanceCounter(&result);
+    return result;
+}
+inline float win32_get_seconds_elapsed(LARGE_INTEGER start, LARGE_INTEGER end)
+{
+    float result = static_cast<float>(end.QuadPart - start.QuadPart)
+        / static_cast<float>(glob_perf_count_frequency);
+    return result;
+}
+
+static void win32_DEBUG_draw_vertical(Win32OffscreenBuffer* glob_backbuffer, int x, int top, int bottom, uint32_t color)
+{
+    uint8_t* pixel = static_cast<uint8_t*>(glob_backbuffer->memory)
+        + x * glob_backbuffer->bytes_per_pixel
+        + top * glob_backbuffer->pitch;
+    for (int y = top; y < bottom; ++y) {
+        *reinterpret_cast<uint32_t*>(pixel) = color;
+         pixel += glob_backbuffer->pitch;
+    }
+}
+
+static void win32_draw_sound_buffer_marker(Win32OffscreenBuffer* backbuffer, Win32SoundOutput* sound_output,
+    float target_seconds_per_frame, float C, int padx, int top, int bottom, DWORD value, uint32_t color)
+{
+    ASSERT(value < sound_output->secondary_buffer_size);
+    float xf = C * static_cast<float>(value);
+    int x = padx + static_cast<int>(xf);
+    win32_DEBUG_draw_vertical(backbuffer, x, top, bottom, color);
+}
+
+static void win32_DEBUG_sync_display(Win32OffscreenBuffer* backbuffer, int marker_count,
+    Win32DEBUGTimeMarker* markers, Win32SoundOutput* sound_output, float target_seconds_per_frame)
+{
+    // TODO(casey): Draw where we're writing out sound
+    int padx = 16;
+    int pady = 16;
+
+    int top = pady;
+    int bottom = backbuffer->height - pady;
+    float C = static_cast<float>(backbuffer->width) / static_cast<float>(sound_output->secondary_buffer_size);
+    backbuffer->width;
+    for (int marker_index = 0; marker_index < marker_count; ++marker_index) {
+        Win32DEBUGTimeMarker* this_marker = &markers[marker_index];
+        win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+            padx, top, bottom, this_marker->play_cursor, 0xFFFFFFFF);
+        win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+            padx, top, bottom, this_marker->write_cursor, 0xFFFF0000);
+    }
 }
 
 int CALLBACK WinMain(HINSTANCE instance,
@@ -495,12 +558,16 @@ int CALLBACK WinMain(HINSTANCE instance,
 {
     LARGE_INTEGER perf_count_frequency_result;
     QueryPerformanceFrequency(&perf_count_frequency_result);
-    int64_t perf_count_frequency = perf_count_frequency_result.QuadPart;
+    glob_perf_count_frequency = perf_count_frequency_result.QuadPart;
+
+    // NOTE(casey): Set the Windows scheduler granularity to 1ms
+    // so that our Sleep() can be more granular.
+    UINT desired_scheduler_ms = 1;
+    bool sleep_granular = (timeBeginPeriod(desired_scheduler_ms) == TIMERR_NOERROR);
 
     win32_load_xinput();
     // NOTE(daniel): Resolution
-    int w = 1280;
-    int h = 720;
+    int w = 1280, h = 720;
     win32_resize_dib_section(glob_backbuffer, w, h);
     WNDCLASSA window_class = {};
     
@@ -508,16 +575,13 @@ int CALLBACK WinMain(HINSTANCE instance,
     window_class.style = CS_HREDRAW|CS_VREDRAW;
     window_class.lpfnWndProc = win32_main_window_proc_cb;    // handle windows messages
     window_class.hInstance = instance;
-
-    // TODO(daniel): Check for hCursor for inkbreaker
-    // window_class.hCursor;
-    // window_class.lpszMenuName;
+    window_class.lpszClassName = "HandmadeHeroWindowClass";
 
     // TODO(casey): How do we reliably query on this on Windows?
-    int monitor_refresh_hz = 60;
-    float game_update_hz = monitor_refresh_hz / 2;
-    float target_seconds_per_frame = 1.0f / static_cast<float>(game_update_hz);
-    window_class.lpszClassName = "HandmadeHeroWindowClass";
+    constexpr int frames_of_audio_latency = 3;
+    constexpr int monitor_refresh_hz = 60;
+    constexpr int game_update_hz = monitor_refresh_hz / 2;
+    constexpr float target_seconds_per_frame = 1.0f / static_cast<float>(game_update_hz);
     
     if (RegisterClass(&window_class)) {
         HWND window = CreateWindowExA(
@@ -545,13 +609,25 @@ int CALLBACK WinMain(HINSTANCE instance,
             sound_output.sample_per_second = 48000;
             sound_output.bytes_per_sample = sizeof(int16_t) * 2;
             sound_output.secondary_buffer_size = static_cast<DWORD>(sound_output.sample_per_second * sound_output.bytes_per_sample);
-            sound_output.latency_sample_count = sound_output.sample_per_second / 16;      // BUG
+            sound_output.latency_sample_count = frames_of_audio_latency * (sound_output.sample_per_second / game_update_hz);      // BUG
 
             win32_init_dsound(window, sound_output.sample_per_second, sound_output.secondary_buffer_size);
             win32_clear_sound_buffer(sound_output);
             glob_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
 
             glob_running = true;
+
+#if 0
+            while (glob_running) {
+                DWORD play_cursor;
+                DWORD write_cursor;
+                glob_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor);
+
+                char text_buffer[256];
+                sprintf_s(text_buffer, sizeof(text_buffer), "pc: %u wc: %u\n", play_cursor, write_cursor);
+                OutputDebugStringA(text_buffer);
+            }
+#endif
 
             // TODO(casey): Pool with bitmap VirtualAlloc
             int16_t* samples = reinterpret_cast<int16_t*>(
@@ -574,13 +650,18 @@ int CALLBACK WinMain(HINSTANCE instance,
                 + game_memory.permanent_storage_size;
 
             if (samples && game_memory.permanent_storage && game_memory.transient_storage) {
-
                 GameInput xbox_input[2] = {};
                 GameInput* new_xbox_input = &xbox_input[0];
                 GameInput* old_xbox_input = &xbox_input[1];
 
-                LARGE_INTEGER last_count;
-                QueryPerformanceCounter(&last_count);
+                int DEBUG_time_markers_index = 0;
+                Win32DEBUGTimeMarker DEBUG_time_markers[game_update_hz / 2] = {};
+
+                DWORD last_play_cursor = 0;
+                bool sound_is_valid = false;
+
+                LARGE_INTEGER last_counter = win32_get_wall_clock();
+                
                 uint64_t last_cycle_count = __rdtsc();
 
                 // NOTE(daniel): GENERIC JOYSTICK CONTROLLER
@@ -742,26 +823,19 @@ int CALLBACK WinMain(HINSTANCE instance,
                         int64_t s_generic_gpad_lanalogy = static_cast<int64_t>(UINT16_MAX / 2 - u_generic_gpad_lanalogy);
 #pragma warning(default:4189)
                     }
-
+                    // NOTE(casey): Compute how much sound to write and where
                     DWORD byte_to_lock = 0;
                     DWORD target_cursor = 0;
                     DWORD bytes_to_write = 0;
-
-                    DWORD play_cursor_pos;
-                    DWORD write_cursor_pos;
-                    bool sound_is_valid = false;
-                    // TODO(casey): Tighten up sound logic so that we know where weshould be
-                    // writing to and can anticipate the time spent in the game update.
-                    if (SUCCEEDED(glob_secondary_buffer->GetCurrentPosition(&play_cursor_pos, &write_cursor_pos))) {
+                    if (sound_is_valid) {
                         byte_to_lock = sound_output.running_sample_index
                             * sound_output.bytes_per_sample
                             % sound_output.secondary_buffer_size;
-                        target_cursor = (play_cursor_pos
+                        target_cursor = (last_play_cursor
                             + sound_output.latency_sample_count
                             * sound_output.bytes_per_sample)
                             % sound_output.secondary_buffer_size;
-                        // TODO(casey): Change this to using a lower latency offset from the playcursor
-                        // when we actually start having sound effects.
+                        
                         if (byte_to_lock > target_cursor) {
                             bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
                             bytes_to_write += target_cursor;
@@ -769,15 +843,12 @@ int CALLBACK WinMain(HINSTANCE instance,
                         else {
                             bytes_to_write = target_cursor - byte_to_lock;
                         }
-                        sound_is_valid = true;
                     }
-
+                    
                     GameSoundOutputBuffer sound_buffer = {};
                     sound_buffer.samples_per_second = sound_output.sample_per_second;
                     sound_buffer.sample_count = static_cast<DWORD>(bytes_to_write) / sound_output.bytes_per_sample;
                     sound_buffer.samples = samples;
-
-
 
                     GameOffscreenBuffer buffer = {};
                     buffer.memory = glob_backbuffer.memory;
@@ -789,52 +860,90 @@ int CALLBACK WinMain(HINSTANCE instance,
 
 
                     if (sound_is_valid) {
-                        // NOTE(casey): DirectSound output test
+#if DEVELOPER_BUILD
+                        DWORD play_cursor;
+                        DWORD write_cursor;
+                        glob_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor);
+                        char text_buffer[256];
+                        sprintf_s(text_buffer, sizeof(text_buffer), "lpc: %u btl: %u tc: %u btw: %u - pc: %u wc: %u\n",
+                            last_play_cursor, byte_to_lock, target_cursor, bytes_to_write, play_cursor, write_cursor);
+                        OutputDebugStringA(text_buffer);
+#endif
                         win32_fill_sound_buffer(sound_output, byte_to_lock, bytes_to_write, sound_buffer);
                     }
 
-                    Win32WindowDimension dimension = win32_get_window_dimension(window);
-                    win32_display_buffer_in_window(glob_backbuffer, device_context, dimension.width, dimension.height);
+                    LARGE_INTEGER work_counter = win32_get_wall_clock();
+                    float work_seconds_elapsed = win32_get_seconds_elapsed(last_counter, work_counter);
 
-                    uint64_t end_cycle_count = __rdtsc();
-
-                    LARGE_INTEGER end_count;
-                    QueryPerformanceCounter(&end_count);
-
-#pragma warning(disable:4189)
-                    // TODO(casey): Display the value here
-                    uint64_t cycles_elapsed = end_cycle_count - last_cycle_count;
-                    int64_t counter_elapsed = end_count.QuadPart - last_count.QuadPart;
-                    float seconds_elapsed_for_work = static_cast<float>(counter_elapsed) / static_cast<float>(perf_count_frequency);
-                    float seconds_elapsed_for_frame = seconds_elapsed_for_work;
-                    while (seconds_elapsed_for_frame < target_seconds_per_frame) {
-                        end_count;
-                        QueryPerformanceCounter(&end_count);
-                        seconds_elapsed_for_work = static_cast<float>(end_count.QuadPart - last_count.QuadPart)
-                            / static_cast<float>(perf_count_frequency);
+                    // TODO(casey): NOT TESTED YET! PROBABLY BUGGY!!!
+                    float seconds_elapsed_for_frame = work_seconds_elapsed;
+                    if (seconds_elapsed_for_frame < target_seconds_per_frame) {
+                        if (sleep_granular) {
+                            DWORD sleep_ms = static_cast<DWORD>(1000.f * (target_seconds_per_frame - seconds_elapsed_for_frame));
+                            if (sleep_ms)
+                                Sleep(sleep_ms);
+                        }
+                        float test_seconds_elapsed_for_frame = win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
+                        //ASSERT(test_seconds_elapsed_for_frame < target_seconds_per_frame);
+                        while (seconds_elapsed_for_frame < target_seconds_per_frame) {
+                            seconds_elapsed_for_frame = win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
+                        }
+                    }
+                    else {
+                        // TODO(casey): MISSED FRAME RATE!
+                        // TODO(casey): Logging
                     }
 
-                    int32_t msec_per_frame = static_cast<int32_t>(1000 * counter_elapsed / perf_count_frequency);    // milissecond per frame
-                    int32_t fps = static_cast<int32_t>(perf_count_frequency / counter_elapsed);
-                    int32_t mcpf = static_cast<int32_t>(cycles_elapsed / (1000 * 1000));        // Mega Cycles Per Frame
-                    double msec_per_framef = 1000.0 * static_cast<double>(counter_elapsed) / static_cast<double>(perf_count_frequency);    // milissecond per frame
-                    double fpsf = static_cast<double>(perf_count_frequency) / static_cast<double>(counter_elapsed);
-                    double mcpff = static_cast<double>(cycles_elapsed) / (1000.0 * 1000.0);        // Mega Cycles Per Frame
-#pragma warning(default:4189)
-#if 0
-                    char buffer[256];
-                    char bufferf[256];
-                    wsprintf(buffer, "%dmsec/d, %dfps, %dmcpf - \n", msec_per_frame, fps, mcpf);
-                    sprintf_s(bufferf, sizeof(bufferf), "%.02fmsec/f, %.02ffps, %.02fmcpf - \n", msec_per_framef, fpsf, mcpff);
-                    OutputDebugStringA(bufferf);
-#endif
-                    last_count = end_count;
-                    last_cycle_count = end_cycle_count;
+                    LARGE_INTEGER end_counter = win32_get_wall_clock();
+                    double msec_per_framef = 1000.0 * win32_get_seconds_elapsed(last_counter, end_counter);
+                    last_counter = end_counter;
 
+                        Win32WindowDimension dimension = win32_get_window_dimension(window);
+#if DEVELOPER_BUILD
+                        win32_DEBUG_sync_display(&glob_backbuffer, ARRAY_COUNT(DEBUG_time_markers), DEBUG_time_markers, &sound_output, target_seconds_per_frame);
+#endif
+                        win32_display_buffer_in_window(glob_backbuffer, device_context, dimension.width, dimension.height);
+
+                        DWORD play_cursor;
+                        DWORD write_cursor;
+                        if (glob_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor) == DS_OK) {
+                            last_play_cursor = play_cursor;
+                            if (!sound_is_valid) {
+                                sound_output.running_sample_index = write_cursor / sound_output.bytes_per_sample;
+                                sound_is_valid = true;
+                            }
+                        }
+                        else {
+                            sound_is_valid = false;
+                        }
+
+#if DEVELOPER_BUILD
+                    // NOTE(casey): This is debug code
+                    {
+                        ASSERT(DEBUG_time_markers_index < ARRAY_COUNT(DEBUG_time_markers));
+                        Win32DEBUGTimeMarker* marker = &DEBUG_time_markers[DEBUG_time_markers_index++];
+                        if (DEBUG_time_markers_index == ARRAY_COUNT(DEBUG_time_markers))
+                            DEBUG_time_markers_index = 0;
+                        marker->play_cursor = play_cursor;
+                        marker->write_cursor = write_cursor;
+                    }
+#endif
                     GameInput* temp = new_xbox_input;
                     new_xbox_input = old_xbox_input;
                     old_xbox_input = temp;
                     // TODO(casey): Should I clear these here?
+
+
+                    uint64_t end_cycle_count = __rdtsc();
+                    uint64_t cycles_elapsed = end_cycle_count - last_cycle_count;
+                    last_cycle_count = end_cycle_count;
+
+                    double fpsf = 0.0f;
+                    double mcpff = static_cast<double>(cycles_elapsed) / (1000.0 * 1000.0);        // Mega Cycles Per Frame
+
+                    char fps_buffer[256];
+                    sprintf_s(fps_buffer, sizeof(fps_buffer), "%.02fmsec/f, %.02ffps, %.02fmcpf - \n", msec_per_framef, fpsf, mcpff);
+                     OutputDebugStringA(fps_buffer);
                 }
             }
             else {

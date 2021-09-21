@@ -14,6 +14,11 @@ struct Win32SoundOutput {
     DWORD latency_sample_count;
 };
 
+struct Win32DEBUGTimeMarker {
+    DWORD play_cursor;
+    DWORD write_cursor;
+};
+
 struct Win32OffscreenBuffer {
     // NOTE(casey): Pixels are always 32-bits wide, memory order BB GG RR XX
     BITMAPINFO info;
@@ -21,6 +26,7 @@ struct Win32OffscreenBuffer {
     int width;
     int height;
     int pitch;
+    int bytes_per_pixel;
 };
 
 struct Win32WindowDimension {

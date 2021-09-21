@@ -55,7 +55,7 @@ void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenB
         memory->is_initialized = true;
     }
 
-    for (int controller_index = 0; controller_index < ARRAY_COUNT(input->controllers); ++controller_index) {
+    for (uint32_t controller_index = 0; controller_index < ARRAY_COUNT(input->controllers); ++controller_index) {
         GameControllerInput* controller = get_controller(input, controller_index);
         if (controller->is_analog) {
             // NOTE(casey): Use analog movement tuning

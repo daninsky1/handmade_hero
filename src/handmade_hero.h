@@ -111,7 +111,7 @@ struct GameInput {
     GameControllerInput controllers[5];
 };
 
-inline GameControllerInput* get_controller(GameInput* input, int controller_index)
+inline GameControllerInput* get_controller(GameInput* input, uint32_t controller_index)
 {
     ASSERT(controller_index < ARRAY_COUNT(input->controllers));
     GameControllerInput* result = &input->controllers[controller_index];
