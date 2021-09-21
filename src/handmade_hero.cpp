@@ -37,6 +37,7 @@ static void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff
 
 void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer, GameSoundOutputBuffer& sound_buffer)
 {
+    ASSERT((&input->controllers[0].start - &input->controllers[0].buttons[0]) == (ARRAY_COUNT(input->controllers[0].buttons) - 1));
     ASSERT(sizeof(GameState) <= memory->permanent_storage_size);
 
     GameState* game_state = reinterpret_cast<GameState*>(memory->permanent_storage);
@@ -54,18 +55,26 @@ void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenB
         memory->is_initialized = true;
     }
 
-    GameControllerInput* input0 = &input->controllers[0];
-    if (input0->is_analog) {
-        // NOTE(casey): Use analog movement tuning
-        game_state->blue_offset += static_cast<int>(4.0f * input0->endx);
-        game_state->tone_hz = 110 + static_cast<uint32_t>(128.0f * input0->endy);
-    }
-    else {
-        // NOTE(casey): Use digital movement tuning
-    }
+    for (int controller_index = 0; controller_index < ARRAY_COUNT(input->controllers); ++controller_index) {
+        GameControllerInput* controller = get_controller(input, controller_index);
+        if (controller->is_analog) {
+            // NOTE(casey): Use analog movement tuning
+            game_state->blue_offset += static_cast<int>(4.0f * controller->stick_averagex);
+            game_state->tone_hz = 110 + static_cast<uint32_t>(128.0f * controller->stick_averagey);
+        }
+        else {
+            // NOTE(casey): Use digital movement tuning
+            if (controller->move_left.ended_down) {
+                game_state->blue_offset -= 1;
+            }
+            if (controller->move_left.ended_down) {
+                game_state->blue_offset += 1;
+            }
+        }
 
-    if (input0->down.ended_down) {
-        game_state->green_offset += 1;
+        if (controller->action_down.ended_down) {
+            game_state->green_offset += 1;
+        }
     }
     // TODO(casey): Allow sample offsets here for more robust platform options
     game_output_sound(sound_buffer, game_state->tone_hz);

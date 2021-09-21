@@ -16,8 +16,7 @@
 #include <cmath>
 
 #if DEVELOPER_BUILD
-    #define ASSERT(expression) \
-        if(!(expression)) { *(int*)0 = 0; }
+    #define ASSERT(expression) if(!(expression)) { *(int*)0 = 0; }
 #else
     #define ASSERT(expression)
 #endif
@@ -76,35 +75,49 @@ struct GameButtonState{
     bool ended_down;
 };
 struct GameControllerInput{
+    bool is_connected;
     bool is_analog;
-
-    float startx;
-    float starty;
-
-    float minx;
-    float miny;
-
-    float maxx;
-    float maxy;
-
-    float endx;
-    float endy;
+    float stick_averagex;
+    float stick_averagey;
 
     union {
-        GameButtonState buttons[6];
+        GameButtonState buttons[12];
         struct {
-            GameButtonState up;
-            GameButtonState down;
-            GameButtonState left;
-            GameButtonState right;
+            GameButtonState move_up;
+            GameButtonState move_down;
+            GameButtonState move_left;
+            GameButtonState move_right;
+
+            GameButtonState action_up;
+            GameButtonState action_down;
+            GameButtonState action_left;
+            GameButtonState action_right;
+
             GameButtonState left_shoulder;
             GameButtonState right_shoulder;
+
+            GameButtonState back;
+            GameButtonState start;
+
+            // NOTE(casey): All buttons must be added above this line
+
+            GameButtonState terminator;
         };
     };
 };
+
 struct GameInput {
-    GameControllerInput controllers[4];
+    // TODO(casey): Insert clock values here
+    GameControllerInput controllers[5];
 };
+
+inline GameControllerInput* get_controller(GameInput* input, int controller_index)
+{
+    ASSERT(controller_index < ARRAY_COUNT(input->controllers));
+    GameControllerInput* result = &input->controllers[controller_index];
+    return result;
+}
+
 
 struct GameState {
     uint32_t tone_hz;

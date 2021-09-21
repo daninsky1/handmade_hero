@@ -302,6 +302,10 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
         // TODO(casey): Handle this as an error - recreate window?
         glob_running = false;
         break;
+    case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+    case WM_KEYDOWN: case WM_KEYUP:
+        //ASSERT(!"Keyboart input bleeded to windows message callback!");
+        break;
     case WM_PAINT:
     {
         PAINTSTRUCT paint;
@@ -399,6 +403,7 @@ void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock,
 }
 static void win32_process_keyboard_message(GameButtonState& new_state, bool is_down)
 {
+    //ASSERT(new_state.ended_down != is_down);
     new_state.ended_down = is_down;
     ++new_state.half_transition;
 }
@@ -408,6 +413,81 @@ static void win32_process_xinput_digital_button(DWORD xinput_button_state, GameB
 {
     new_state.ended_down = (xinput_button_state & button_bit) != 0;
     new_state.half_transition = (old_state.ended_down != new_state.ended_down) ? 1 : 0;
+}
+
+void win32_process_pending_messages(GameControllerInput* keyboard_controller)
+{
+    MSG message;
+    while (PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
+        switch (message.message) {
+        case WM_QUIT:
+            glob_running = false;
+            break;
+        case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+        case WM_KEYDOWN: case WM_KEYUP:
+        {
+            uint32_t vk_code = static_cast<uint32_t>(message.wParam);
+            bool was_down = (message.lParam & (1 << 30)) != 0;
+            bool is_down = (message.lParam & (1L << 31L)) == 0;
+            if (was_down != is_down) {
+                if (vk_code == 'W') {
+                    win32_process_keyboard_message(keyboard_controller->move_up, is_down);
+                }
+                else if (vk_code == 'A') {
+                    win32_process_keyboard_message(keyboard_controller->move_left, is_down);
+                }
+                else if (vk_code == 'S') {
+                    win32_process_keyboard_message(keyboard_controller->move_down, is_down);
+                }
+                else if (vk_code == 'D') {
+                    win32_process_keyboard_message(keyboard_controller->move_right, is_down);
+                }
+                else if (vk_code == 'Q') {
+                    win32_process_keyboard_message(keyboard_controller->left_shoulder, is_down);
+                }
+                else if (vk_code == 'E') {
+                    win32_process_keyboard_message(keyboard_controller->right_shoulder, is_down);
+                }
+                else if (vk_code == VK_UP) {
+                    win32_process_keyboard_message(keyboard_controller->action_up, is_down);
+                }
+                else if (vk_code == VK_DOWN) {
+                    ASSERT(was_down != is_down);
+                    win32_process_keyboard_message(keyboard_controller->action_down, is_down);
+                }
+                else if (vk_code == VK_LEFT) {
+                    win32_process_keyboard_message(keyboard_controller->action_left, is_down);
+                }
+                else if (vk_code == VK_RIGHT) {
+                    win32_process_keyboard_message(keyboard_controller->action_right, is_down);
+                }
+                else if (vk_code == VK_SPACE) {
+                    OutputDebugString("SPACE\n");
+                }
+
+                bool altkey_is_down = (message.lParam & (1 << 29)) != 0;
+                if ((vk_code == VK_F4) && altkey_is_down)
+                    glob_running = false;
+            }
+            break;
+        }
+        default:
+            TranslateMessage(&message);
+            DispatchMessageA(&message);
+        }
+        TranslateMessage(&message);
+        DispatchMessage(&message);
+    }
+}
+
+static float win32_process_xinput_stick_value(SHORT value, SHORT deadzone_threshold)
+{
+    float result = 0;
+    if (value < -deadzone_threshold)
+        result = static_cast<float>((value + deadzone_threshold) / (32768.0f - deadzone_threshold));
+    else if (value > deadzone_threshold)
+        result = static_cast<float>((value + deadzone_threshold) / (32768.0f - deadzone_threshold));
+    return result;
 }
 
 int CALLBACK WinMain(HINSTANCE instance,
@@ -432,6 +512,11 @@ int CALLBACK WinMain(HINSTANCE instance,
     // TODO(daniel): Check for hCursor for inkbreaker
     // window_class.hCursor;
     // window_class.lpszMenuName;
+
+    // TODO(casey): How do we reliably query on this on Windows?
+    int monitor_refresh_hz = 60;
+    float game_update_hz = monitor_refresh_hz / 2;
+    float target_seconds_per_frame = 1.0f / static_cast<float>(game_update_hz);
     window_class.lpszClassName = "HandmadeHeroWindowClass";
     
     if (RegisterClass(&window_class)) {
@@ -523,143 +608,102 @@ int CALLBACK WinMain(HINSTANCE instance,
                 GameInput* old_generic_input = &generic_input[1];
 
                 while (glob_running) {
-                    MSG message;
-
-                    GameControllerInput* keyboard_controller = &new_xbox_input->controllers[0];
                     // TODO(casey): Zeroing macro
                     // TODO(casey): We can't zero everything because the up/down state will be wrong!!!
-                    GameControllerInput zero_controller = {};
-                    *keyboard_controller = zero_controller;
-
-                    while (PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
-                        if (message.message == WM_QUIT) glob_running = false;
-
-                        switch (message.message) {
-                        case WM_SYSKEYDOWN: case WM_SYSKEYUP:
-                        case WM_KEYDOWN: case WM_KEYUP:
-                        {
-                            uint32_t vk_code = static_cast<uint32_t>(message.wParam);
-                            bool was_down = (message.lParam & (1 << 30)) != 0;
-                            bool is_down = (message.lParam & (1L << 31L)) == 0;
-                            if (was_down != is_down) {
-                                if (vk_code == 'W') {
-                                    OutputDebugString("W\n");
-                                }
-                                else if (vk_code == 'A') {
-                                    OutputDebugString("A\n");
-                                }
-                                else if (vk_code == 'S') {
-                                    OutputDebugString("S\n");
-                                }
-                                else if (vk_code == 'D') {
-                                    OutputDebugString("D\n");
-                                }
-                                else if (vk_code == 'Q') {
-                                    win32_process_keyboard_message(keyboard_controller->left_shoulder, is_down);
-                                }
-                                else if (vk_code == 'E') {
-                                    win32_process_keyboard_message(keyboard_controller->right_shoulder, is_down);
-                                }
-                                else if (vk_code == VK_UP) {
-                                    win32_process_keyboard_message(keyboard_controller->up, is_down);
-                                }
-                                else if (vk_code == VK_DOWN) {
-                                    win32_process_keyboard_message(keyboard_controller->down, is_down);
-                                }
-                                else if (vk_code == VK_LEFT) {
-                                    win32_process_keyboard_message(keyboard_controller->left, is_down);
-                                }
-                                else if (vk_code == VK_RIGHT) {
-                                    win32_process_keyboard_message(keyboard_controller->right, is_down);
-                                }
-                                else if (vk_code == VK_ESCAPE) {
-                                    OutputDebugString("ESCAPE: ");
-                                    if (is_down) {
-                                        OutputDebugString("is_down ");
-                                    }
-                                    if (was_down) {
-                                        OutputDebugString("was_down");
-                                    }
-                                    OutputDebugString("\n");
-                                }
-                                else if (vk_code == VK_SPACE) {
-                                    OutputDebugString("SPACE\n");
-                                }
-
-                                bool altkey_is_down = (message.lParam & (1 << 29)) != 0;
-                                if ((vk_code == VK_F4) && altkey_is_down)
-                                    glob_running = false;
-                            }
-                            break;
-                        }
-                        default:
-                            TranslateMessage(&message);
-                            DispatchMessageA(&message);
-                        }
-                        TranslateMessage(&message);
-                        DispatchMessage(&message);
+                    GameControllerInput* old_keyboard_controller = &new_xbox_input->controllers[0];
+                    GameControllerInput* new_keyboard_controller = &new_xbox_input->controllers[0];
+                    *new_keyboard_controller = {};
+                    new_keyboard_controller->is_connected = true;
+                    for (int button_index = 0; button_index < ARRAY_COUNT(new_keyboard_controller->buttons); ++button_index) {
+                        new_keyboard_controller->buttons[button_index].ended_down =
+                            old_keyboard_controller->buttons[button_index].ended_down;
                     }
+
+                    win32_process_pending_messages(new_keyboard_controller);
 
                     // TODO(casey): Should we poll this more frequently?
-                    DWORD max_controller_count = XUSER_MAX_COUNT;
-                    if (max_controller_count > ARRAY_COUNT(new_xbox_input->controllers)) {
-                        max_controller_count = ARRAY_COUNT(new_xbox_input->controllers);
+                    DWORD max_controller_count = 1 + XUSER_MAX_COUNT;
+                    if (max_controller_count > (ARRAY_COUNT(new_xbox_input->controllers) - 1)) {
+                        max_controller_count = ARRAY_COUNT(new_xbox_input->controllers) - 1;
                     }
 
-                    for (DWORD controller_i = 0; controller_i < max_controller_count; ++controller_i) {
-                        GameControllerInput* old_xbox_controller = &old_xbox_input->controllers[controller_i];
-                        GameControllerInput* new_xbox_controller = &new_xbox_input->controllers[controller_i];
+                    for (DWORD controller_index = 0; controller_index < max_controller_count; ++controller_index) {
+                        DWORD our_controller_index = 1 + max_controller_count;
+                        GameControllerInput* old_xbox_controller = get_controller(old_xbox_input, controller_index);
+                        GameControllerInput* new_xbox_controller = get_controller(new_xbox_input, controller_index);
 
                         XINPUT_STATE controller_state;
-                        if (XInputGetState(controller_i, &controller_state) == ERROR_SUCCESS) {
+                        if (XInputGetState(controller_index, &controller_state) == ERROR_SUCCESS) {
+                            new_xbox_controller->is_connected = true;
                             // NOTE(casey): This controller is plugged in
                             // TODO(casey): See if controller_state.dwPacketNumber increments to rapidly
-#pragma warning(disable:4189)
                             XINPUT_GAMEPAD* pad = &controller_state.Gamepad;
+                            // TODO(casey): DPad
+#pragma warning(disable:4189)
                             bool gpad_up = pad->wButtons & XINPUT_GAMEPAD_DPAD_UP;
                             bool gpad_down = pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
                             bool gpad_right = pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
                             bool gpad_left = pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
-                            new_xbox_controller->is_analog = true;
-                            new_xbox_controller->startx = old_xbox_controller->endx;
-                            new_xbox_controller->starty = old_xbox_controller->endy;
 #pragma warning(default:4189)
-                            // TODO(casey): We will do deadzone handling later using
-                            // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
-                            // XINPUT_GAMEPAD_RIGTH_THUMB_DEADZONE
-                            // TODO(casey): Min/Max macros!!!
-                            float x;
-                            if (pad->sThumbLX < 0)
-                                x = static_cast<float>(pad->sThumbLX / 32768.0f);
-                            else
-                                x = static_cast<float>(pad->sThumbLX / 32767.0f);
-                            new_xbox_controller->minx = new_xbox_controller->maxx = new_xbox_controller->endx = x;
+                            new_xbox_controller->is_analog = true;
+                            new_xbox_controller->stick_averagex= win32_process_xinput_stick_value(pad->sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                            new_xbox_controller->stick_averagey= win32_process_xinput_stick_value(pad->sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
 
-                            float y;
-                            if (pad->sThumbLY < 0)
-                                y = static_cast<float>(pad->sThumbLY / 32768.0f);
-                            else
-                                y = static_cast<float>(pad->sThumbLY / 32767.0f);
-                            new_xbox_controller->minx = new_xbox_controller->maxx = new_xbox_controller->endx = y;
+                            if ((new_xbox_controller->stick_averagex != 0.0f) || (new_xbox_controller->stick_averagey != 0.0f)) {
+                                new_xbox_controller->is_analog = true;
+                            }
+                            if (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP) {
+                                new_xbox_controller->stick_averagey = 1.0f;
+                                new_xbox_controller->is_analog = false;
+                            }
+                            if (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) {
+                                new_xbox_controller->stick_averagey = -1.0f;
+                                new_xbox_controller->is_analog = false;
+                            }
+                            if (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) {
+                                new_xbox_controller->stick_averagex = -1.0f;
+                                new_xbox_controller->is_analog = false;
+                            }
+                            if (pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) {
+                                new_xbox_controller->stick_averagex = 1.0f;
+                                new_xbox_controller->is_analog = false;
+                            }
 
-                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->down,
-                                XINPUT_GAMEPAD_A, new_xbox_controller->down);
-                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->right,
-                                XINPUT_GAMEPAD_B, new_xbox_controller->right);
-                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->left,
-                                XINPUT_GAMEPAD_X, new_xbox_controller->left);
-                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->up,
-                                XINPUT_GAMEPAD_Y, new_xbox_controller->up);
+
+                            float threshold = 0.5f;
+                            win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_down,
+                                1, new_xbox_controller->move_down);
+                            win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_up,
+                                1, new_xbox_controller->move_up);
+                            win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_left,
+                                1, new_xbox_controller->move_left);
+                            win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_right,
+                                1, new_xbox_controller->move_right);
+
+                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_down,
+                                XINPUT_GAMEPAD_A, new_xbox_controller->action_down);
+                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_right,
+                                XINPUT_GAMEPAD_B, new_xbox_controller->action_right);
+                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_left,
+                                XINPUT_GAMEPAD_X, new_xbox_controller->action_left);
+                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_up,
+                                XINPUT_GAMEPAD_Y, new_xbox_controller->action_up);
                             win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->left_shoulder,
                                 XINPUT_GAMEPAD_LEFT_SHOULDER, new_xbox_controller->left_shoulder);
                             win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->right_shoulder,
                                 XINPUT_GAMEPAD_RIGHT_SHOULDER, new_xbox_controller->right_shoulder);
+
+                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->back,
+                                XINPUT_GAMEPAD_BACK, new_xbox_controller->back);
+                            win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->start,
+                                XINPUT_GAMEPAD_START, new_xbox_controller->start);
 
                             // bool gpad_start      = pad->wButtons & XINPUT_GAMEPAD_START;
                             // bool gpad_back       = pad->wButtons & XINPUT_GAMEPAD_BACK;
                         }
                         else {
                             // NOTE(casey): The controller is not available 
+                            new_xbox_controller->is_connected = false;
                         }
                     }
                     // Test vibration
@@ -761,6 +805,15 @@ int CALLBACK WinMain(HINSTANCE instance,
                     // TODO(casey): Display the value here
                     uint64_t cycles_elapsed = end_cycle_count - last_cycle_count;
                     int64_t counter_elapsed = end_count.QuadPart - last_count.QuadPart;
+                    float seconds_elapsed_for_work = static_cast<float>(counter_elapsed) / static_cast<float>(perf_count_frequency);
+                    float seconds_elapsed_for_frame = seconds_elapsed_for_work;
+                    while (seconds_elapsed_for_frame < target_seconds_per_frame) {
+                        end_count;
+                        QueryPerformanceCounter(&end_count);
+                        seconds_elapsed_for_work = static_cast<float>(end_count.QuadPart - last_count.QuadPart)
+                            / static_cast<float>(perf_count_frequency);
+                    }
+
                     int32_t msec_per_frame = static_cast<int32_t>(1000 * counter_elapsed / perf_count_frequency);    // milissecond per frame
                     int32_t fps = static_cast<int32_t>(perf_count_frequency / counter_elapsed);
                     int32_t mcpf = static_cast<int32_t>(cycles_elapsed / (1000 * 1000));        // Mega Cycles Per Frame
