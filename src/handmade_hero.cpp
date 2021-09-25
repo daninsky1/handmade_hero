@@ -1,7 +1,12 @@
+#ifdef WIN32_HANDMADE
+#include "win32_handmade_hero.h"
+#endif
+
+
 #include "handmade_hero.h"
 
 
-static void game_output_sound(GameSoundOutputBuffer & sound_buffer, uint32_t hz)
+void game_output_sound(GameSoundOutputBuffer& sound_buffer, uint32_t hz)
 {
     static float tsine;
     int16_t tone_volume = 8000;
@@ -15,11 +20,13 @@ static void game_output_sound(GameSoundOutputBuffer & sound_buffer, uint32_t hz)
         *sample_out++ = sample_value;
         *sample_out++ = sample_value;
 
-        tsine += 2.0f * static_cast<float>(M_PI) * 1.0f / static_cast<float>(wave_period);
+        const float two_pi = 2.0f * static_cast<float>(M_PI);
+        tsine += two_pi * 1.0f / static_cast<float>(wave_period);
+        if (tsine > two_pi) tsine -= two_pi;
     }
 }
 
-static void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff)
+void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff)
 {
     uint8_t* row = static_cast<uint8_t*>(buffer.memory);
     uint32_t* pixel = static_cast<uint32_t*>(buffer.memory);
@@ -35,7 +42,7 @@ static void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff
     }
 }
 
-void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer, GameSoundOutputBuffer& sound_buffer)
+void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer)
 {
     ASSERT((&input->controllers[0].start - &input->controllers[0].buttons[0]) == (ARRAY_COUNT(input->controllers[0].buttons) - 1));
     ASSERT(sizeof(GameState) <= memory->permanent_storage_size);
@@ -77,6 +84,11 @@ void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenB
         }
     }
     // TODO(casey): Allow sample offsets here for more robust platform options
-    game_output_sound(sound_buffer, game_state->tone_hz);
     render_test_gradient(buffer, game_state->blue_offset, game_state->green_offset);
+}
+
+void game_get_sound_samples(GameMemory* memory, GameSoundOutputBuffer& sound_buffer)
+{
+    GameState* game_state = reinterpret_cast<GameState*>(memory->permanent_storage);
+    game_output_sound(sound_buffer, game_state->tone_hz);
 }

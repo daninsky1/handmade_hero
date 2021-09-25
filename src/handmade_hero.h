@@ -118,13 +118,6 @@ inline GameControllerInput* get_controller(GameInput* input, uint32_t controller
     return result;
 }
 
-
-struct GameState {
-    uint32_t tone_hz;
-    int green_offset;
-    int blue_offset;
-};
-
 struct GameMemory {
     bool is_initialized;
     uint64_t permanent_storage_size;
@@ -133,4 +126,16 @@ struct GameMemory {
     void* transient_storage;    // NOTE(casey): REQUIRED to be cleared to zero at startup
 };
 
-void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer, GameSoundOutputBuffer& sound_buffer);
+void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer);
+
+// NOTE(casey): At the moment, this has to be a bery fast function, it cannot be
+// more than a millisecond or so.
+// TODO(casey): Reduce the pressure on this function's performance by measuring it
+// or asking about it, etc.
+void game_get_sound_samples(GameMemory* memory, GameSoundOutputBuffer& sound_buffer);
+
+struct GameState {
+    uint32_t tone_hz;
+    int green_offset;
+    int blue_offset;
+};
