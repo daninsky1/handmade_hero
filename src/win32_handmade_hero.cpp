@@ -71,7 +71,14 @@ static xinput_set_state* XInputSetState_ = XInputSetStateStub;
 #define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPGUID lpGuid, LPDIRECTSOUND* ppDS, LPUNKNOWN  pUnkOuter);
 typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
-DEBUGReadFileResult DEBUG_platform_read_entire_file(char* filename)
+DEBUG_PLATFORM_FREE_FILE_MEMORY(DEBUG_platform_free_file_memory)
+{
+    if (memory) {
+        VirtualFree(memory, 0, MEM_RELEASE);
+    }
+}
+
+DEBUG_PLATFORM_READ_ENTIRE_FILE(DEBUG_platform_read_entire_file)
 {
     DEBUGReadFileResult result = {};
 
@@ -109,14 +116,7 @@ DEBUGReadFileResult DEBUG_platform_read_entire_file(char* filename)
     return result;
 }
 
-void DEBUG_platform_free_file_memory(void* memory)
-{
-    if (memory) {
-        VirtualFree(memory, 0, MEM_RELEASE);
-    }
-}
-
-bool DEBUG_platform_write_entire_file(char* filename, uint32_t memory_size, void* memory)
+DEBUG_PLATFORM_WRITE_ENTIRE_FILE(DEBUG_platform_write_entire_file)
 {
     bool result = false;
 
@@ -139,6 +139,53 @@ bool DEBUG_platform_write_entire_file(char* filename, uint32_t memory_size, void
     return result;
 }
 
+struct Win32GameLibrary {
+    HMODULE game_library;
+    // NOTE(daniel): Function types
+    GameUpdateAndRender* update_and_render;
+    GameGetSoundSamples* get_sound_samples;
+
+    bool is_valid;
+};
+
+// NOTE(daniel): warning 4191, disabled for GetProcAddress to avoid cast madness:
+// reinterpret_cast<funcptr>(reinterpret_cast<void*>(GetProcAddress(...))))
+
+static Win32GameLibrary win32_load_game_library()
+{
+    Win32GameLibrary result =  { };
+
+    CopyFile("handmade_hero.dll", "handmade_hero_temp.dll", FALSE);
+    result.game_library = LoadLibrary("handmade_hero_temp.dll");
+    if (result.game_library) {
+#pragma warning(disable: 4191)
+        result.update_and_render = reinterpret_cast<GameUpdateAndRender*>(
+            GetProcAddress(result.game_library, "game_update_and_render"));
+        result.get_sound_samples = reinterpret_cast<GameGetSoundSamples*>(
+            GetProcAddress(result.game_library, "game_get_sound_samples"));
+#pragma warning(default: 4191)
+        result.is_valid = result.update_and_render && result.get_sound_samples;
+    }
+
+    if (!result.is_valid) {
+        result.update_and_render = game_update_and_render_stub;
+        result.get_sound_samples = game_get_sound_samples_stub;
+    }
+
+    return result;
+}
+
+static void win32_unload_game_library(Win32GameLibrary* game_lib)
+{
+    if (game_lib) {
+        FreeLibrary(game_lib->game_library);
+        game_lib->game_library = 0;
+    }
+    game_lib->is_valid = false;
+    game_lib->update_and_render = game_update_and_render_stub;
+    game_lib->get_sound_samples = game_get_sound_samples_stub;
+}
+
 static void win32_load_xinput()
 {
     HMODULE xinput_library = LoadLibraryA("xinput1_4.dll");
@@ -150,7 +197,6 @@ static void win32_load_xinput()
         xinput_library = LoadLibraryA("xinput1_3.dll");
     }
     
-    // TODO(daniel): Check warning 4191
 #pragma warning(disable: 4191)
     if (xinput_library) {
 
@@ -250,7 +296,6 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
 {
     // TODO(casey): Bulletproof this.
     // Maybe don't free first, free after, then free first if that fails.
-
     if (buffer.memory) {
         VirtualFree(buffer.memory, 0, MEM_RELEASE);
     }
@@ -295,6 +340,7 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
                                            WPARAM w_parameter,
                                            LPARAM l_parameter)
 {
+
     LRESULT result = 0;
 
     switch (message) {
@@ -473,7 +519,7 @@ void win32_process_pending_messages(GameControllerInput* keyboard_controller)
                 else if (vk_code == VK_SPACE) {
                     OutputDebugString("SPACE\n");
                 }
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
                 else if (vk_code == 'P') {
                     if (is_down)
                         glob_pause = !glob_pause;
@@ -537,8 +583,8 @@ static void win32_DEBUG_draw_vertical(Win32OffscreenBuffer* backbuffer, int x, i
     }
 }
 
-static void win32_draw_sound_buffer_marker(Win32OffscreenBuffer* backbuffer, Win32SoundOutput* sound_output,
-    float target_seconds_per_frame, float C, int padx, int top, int bottom, DWORD value, uint32_t color)
+static void win32_draw_sound_buffer_marker(Win32OffscreenBuffer* backbuffer, Win32SoundOutput* /*sound_buffer*/,
+    float C, int padx, int top, int bottom, DWORD value, uint32_t color)
 {
     float xf = C * static_cast<float>(value);
     int x = padx + static_cast<int>(xf);
@@ -547,7 +593,7 @@ static void win32_draw_sound_buffer_marker(Win32OffscreenBuffer* backbuffer, Win
 
 static void win32_DEBUG_sync_display(Win32OffscreenBuffer* backbuffer, int marker_count,
     Win32DEBUGTimeMarker* markers, int current_marker_index, Win32SoundOutput* sound_output,
-    float target_seconds_per_frame)
+    float /*target_seconds_per_frame*/)
 {
     int padx = 16;
     int pady = 16;
@@ -567,7 +613,7 @@ static void win32_DEBUG_sync_display(Win32OffscreenBuffer* backbuffer, int marke
         DWORD play_color = 0xFFFFFFFF;
         DWORD write_color = 0xFFFF0000;
         DWORD expected_flip_color = 0xFFFFFF00;
-        DWORD play_win_color = 0xFFFF00FF;
+        /*DWORD play_win_color = 0xFFFF00FF;*/
 
         int top = pady;
         int bottom = pady + line_height;
@@ -576,30 +622,30 @@ static void win32_DEBUG_sync_display(Win32OffscreenBuffer* backbuffer, int marke
             top += pady + line_height;
             bottom += pady + line_height;
 
-            win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+            win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
                 padx, top, bottom, this_marker->output_play_cursor, play_color);
-            win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+            win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
                 padx, top, bottom, this_marker->output_write_cursor, write_color);
 
             top += pady + line_height;
             bottom += pady + line_height;
 
-            win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+            win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
                 padx, top, bottom, this_marker->output_location, play_color);
-            win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+            win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
                 padx, top, bottom, this_marker->output_location + this_marker->output_byte_count, write_color);
 
             top += pady + line_height;
             bottom += pady + line_height;
 
-            win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+            win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
                 padx, first_top, bottom, this_marker->expected_flip_play_cursor, expected_flip_color);
         }
-        win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+        win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
             padx, top, bottom, this_marker->flip_play_cursor, play_color);
-        win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+        win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
             padx, top, bottom, this_marker->flip_play_cursor, play_color);
-        win32_draw_sound_buffer_marker(backbuffer, sound_output, target_seconds_per_frame, C,
+        win32_draw_sound_buffer_marker(backbuffer, sound_output, C,
             padx, top, bottom, this_marker->flip_write_cursor, write_color);
     }
 }
@@ -607,6 +653,7 @@ static void win32_DEBUG_sync_display(Win32OffscreenBuffer* backbuffer, int marke
 int CALLBACK WinMain(HINSTANCE instance,
                      HINSTANCE, LPSTR, int)
 {
+
     LARGE_INTEGER perf_count_frequency_result;
     QueryPerformanceFrequency(&perf_count_frequency_result);
     glob_perf_count_frequency = perf_count_frequency_result.QuadPart;
@@ -689,7 +736,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                 VirtualAlloc(0, sound_output.secondary_buffer_size, MEM_COMMIT, PAGE_READWRITE));
 
 
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
             LPVOID base_address = reinterpret_cast<LPVOID>(TERABYTES(2ull));
 #else
             LPVOID base_address = 0;
@@ -697,6 +744,11 @@ int CALLBACK WinMain(HINSTANCE instance,
             GameMemory game_memory = {};
             game_memory.permanent_storage_size = MEGABYTES(64);
             game_memory.transient_storage_size = GIGABYTES(4ull);
+            
+            game_memory.DEBUG_platform_free_file_memory = &DEBUG_platform_free_file_memory;
+            game_memory.DEBUG_platform_read_entire_file = &DEBUG_platform_read_entire_file;
+            game_memory.DEBUG_platform_write_entire_file = &DEBUG_platform_write_entire_file;
+            
 
             uint64_t total_size = game_memory.permanent_storage_size + game_memory.transient_storage_size;
             game_memory.permanent_storage = VirtualAlloc(base_address, total_size,
@@ -727,7 +779,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                 JOYINFOEX joyinfoex;
                 UINT joystick_id = JOYSTICKID1;
                 JOYCAPS joy_capabilities;
-                BOOL dev_attached;
+                /*BOOL dev_attached;*/
                 // NOTE(daniel): Number of joystick supported by the system drive,
                 // however doesn't indicate the number of joystick attached to the system
                 if (joyGetNumDevs()) { }    // TODO(daniel): Success joystrick supported
@@ -743,10 +795,19 @@ int CALLBACK WinMain(HINSTANCE instance,
                 joyinfoex.dwFlags = JOY_RETURNBUTTONS | JOY_RETURNX | JOY_RETURNY | JOY_RETURNPOV;
 
                 GameInput generic_input[2] = {};
-                GameInput* new_generic_input = &generic_input[0];
-                GameInput* old_generic_input = &generic_input[1];
+                /*GameInput* new_generic_input = &generic_input[0];
+                GameInput* old_generic_input = &generic_input[1];*/
+
+                Win32GameLibrary game_library = win32_load_game_library();
+                int load_counter = 0;
 
                 while (glob_running) {
+                    if (load_counter++ > 120) {
+                        win32_unload_game_library(&game_library);
+                        game_library = win32_load_game_library();
+                        load_counter = 0;
+                    }
+
                     // TODO(casey): Zeroing macro
                     // TODO(casey): We can't zero everything because the up/down state will be wrong!!!
                     GameControllerInput* old_keyboard_controller = &new_xbox_input->controllers[0];
@@ -767,7 +828,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                         }
 
                         for (DWORD controller_index = 0; controller_index < max_controller_count; ++controller_index) {
-                            DWORD our_controller_index = 1 + max_controller_count;
+                            /*DWORD our_controller_index = 1 + max_controller_count;*/
                             GameControllerInput* old_xbox_controller = get_controller(old_xbox_input, controller_index);
                             GameControllerInput* new_xbox_controller = get_controller(new_xbox_input, controller_index);
 
@@ -810,14 +871,14 @@ int CALLBACK WinMain(HINSTANCE instance,
 
 
                                 float threshold = 0.5f;
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_down,
-                                    1, new_xbox_controller->move_down);
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_up,
-                                    1, new_xbox_controller->move_up);
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_left,
-                                    1, new_xbox_controller->move_left);
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1 : 0, old_xbox_controller->move_right,
-                                    1, new_xbox_controller->move_right);
+                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_down,
+                                    1ul, new_xbox_controller->move_down);
+                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_up,
+                                    1ul, new_xbox_controller->move_up);
+                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_left,
+                                    1ul, new_xbox_controller->move_left);
+                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_right,
+                                    1ul, new_xbox_controller->move_right);
 
                                 win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_down,
                                     XINPUT_GAMEPAD_A, new_xbox_controller->action_down);
@@ -856,8 +917,8 @@ int CALLBACK WinMain(HINSTANCE instance,
                         // NOTE(daniel): This is playstation 2 nomenclatures
 
                         if (joyGetPosEx(joystick_id, &joyinfoex) != JOYERR_UNPLUGGED) {
-                            GameControllerInput* old_generic_controller = &old_generic_input->controllers[0];
-                            GameControllerInput* new_generic_controller = &new_generic_input->controllers[0];
+                            /*GameControllerInput* old_generic_controller = &old_generic_input->controllers[0];
+                            GameControllerInput* new_generic_controller = &new_generic_input->controllers[0];*/
                             // TODO(daniel): BUG: limited dpad directions
                             // Joystick dpad
 #pragma warning(disable:4189)
@@ -887,10 +948,10 @@ int CALLBACK WinMain(HINSTANCE instance,
                         buffer.width = glob_backbuffer.width;
                         buffer.height = glob_backbuffer.height;
                         buffer.pitch = glob_backbuffer.pitch;
-                        game_update_and_render(&game_memory, new_xbox_input, buffer);
+                        game_library.update_and_render(&game_memory, new_xbox_input, buffer);
 
                         LARGE_INTEGER audio_wall_clock = win32_get_wall_clock();
-                        double from_begin_to_audio_sec= 1000.0 * win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);
+                        /*float from_begin_to_audio_sec= 1000.0f * win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);*/
 
                         DWORD play_cursor;
                         DWORD write_cursor;
@@ -919,7 +980,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                              * will write one frame's worth of audio plus the safety
                              * margin's worth of guard samples.
                              * */
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
 
 #endif
                             if (!sound_is_valid) {
@@ -933,10 +994,10 @@ int CALLBACK WinMain(HINSTANCE instance,
                             DWORD expected_sound_bytes_per_frame = sound_output.sample_per_second
                                 * sound_output.bytes_per_sample
                                 / game_update_hz;
-                            float sec_left_until_flip = target_seconds_per_frame - from_begin_to_audio_sec;
-                            DWORD expected_bytes_until_flip = static_cast<DWORD>((sec_left_until_flip / target_seconds_per_frame)
-                                /expected_sound_bytes_per_frame)
-                                * static_cast<float>(expected_sound_bytes_per_frame);
+                            /*float sec_left_until_flip = target_seconds_per_frame - from_begin_to_audio_sec;
+                            DWORD expected_bytes_until_flip = static_cast<DWORD>(sec_left_until_flip / target_seconds_per_frame)
+                                / expected_sound_bytes_per_frame
+                                * expected_sound_bytes_per_frame;*/
 
 
                             DWORD expected_frame_boundary_byte = play_cursor + expected_sound_bytes_per_frame;
@@ -971,9 +1032,9 @@ int CALLBACK WinMain(HINSTANCE instance,
                             sound_buffer.samples_per_second = sound_output.sample_per_second;
                             sound_buffer.sample_count = static_cast<DWORD>(bytes_to_write) / sound_output.bytes_per_sample;
                             sound_buffer.samples = samples;
-                            game_get_sound_samples(&game_memory, sound_buffer);
+                            game_library.get_sound_samples(&game_memory, sound_buffer);
 
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
                             Win32DEBUGTimeMarker* marker = &DEBUG_time_markers[DEBUG_time_markers_index];
                             marker->output_play_cursor = play_cursor;
                             marker->output_write_cursor = write_cursor;
@@ -991,10 +1052,11 @@ int CALLBACK WinMain(HINSTANCE instance,
                             audio_latency_seconds = static_cast<float>(audio_latency_bytes)
                                 / static_cast<float>(sound_output.bytes_per_sample)
                                 / static_cast<float>(sound_output.sample_per_second);
-
+#pragma warning(disable: 4777)
                             char text_buffer[256];
                             sprintf_s(text_buffer, sizeof(text_buffer), "btl: %u tc: %u btw: %u - pc: %u wc: %u delta: %u (%fs)\n",
                                 byte_to_lock, target_cursor, bytes_to_write, play_cursor, write_cursor,
+#pragma warning(default: 4777)
                                 audio_latency_bytes, audio_latency_seconds);
                             OutputDebugStringA(text_buffer);
 #endif
@@ -1036,7 +1098,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                         last_counter = end_counter;
 
                         Win32WindowDimension dimension = win32_get_window_dimension(window);
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
                         // NOTE(casey): Note, current is wrong on the zero'th index
                         win32_DEBUG_sync_display(&glob_backbuffer, ARRAY_COUNT(DEBUG_time_markers), DEBUG_time_markers, DEBUG_time_markers_index - 1, &sound_output, target_seconds_per_frame);
 #endif
@@ -1044,7 +1106,7 @@ int CALLBACK WinMain(HINSTANCE instance,
 
                         flip_wall_clock = win32_get_wall_clock();
 
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
                         // NOTE(casey): This is debug code
                         {
                             DWORD play_cursor;
@@ -1073,7 +1135,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                         char fps_buffer[256];
                         sprintf_s(fps_buffer, sizeof(fps_buffer), "%.02fmsec/f, %.02ffps, %.02fmcpf - \n", msec_per_framef, fpsf, mcpff);
                         OutputDebugStringA(fps_buffer);
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
                         ++DEBUG_time_markers_index;
                         if (DEBUG_time_markers_index == ARRAY_COUNT(DEBUG_time_markers)) {
                             DEBUG_time_markers_index = 0;

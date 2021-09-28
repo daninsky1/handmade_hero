@@ -2,7 +2,7 @@
 
 /*
 * NOTE(daniel):
-* DEVELOPER_BUILD:
+* HANDMADE_DEVELOPER_BUILD:
 *   0 - Build for public release
 *   1 - Build for developer only
 * 
@@ -15,7 +15,7 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
     #define ASSERT(expression) if(!(expression)) { *(int*)0 = 0; }
 #else
     #define ASSERT(expression)
@@ -36,7 +36,7 @@ inline uint32_t safe_truncate_int64_t(int64_t value)
 /*
 * NOTE(casey): services that the platform layer provides to the game
 */
-#if DEVELOPER_BUILD
+#if HANDMADE_DEVELOPER_BUILD
 /* IMPORTANT(casey): These are NOT for doing anything in the shipping game = they are
 *  blocking and the write doesn't protect againt lost data!
 */
@@ -44,9 +44,15 @@ struct DEBUGReadFileResult {
     void* content;
     uint32_t content_size;
 };
-DEBUGReadFileResult DEBUG_platform_read_entire_file(char* filename);
-void DEBUG_platform_free_file_memory(void* memory);
-bool DEBUG_platform_write_entire_file(char* filename, uint32_t memory_size, void* memory);
+#define DEBUG_PLATFORM_FREE_FILE_MEMORY(name) void name(void* memory)
+typedef DEBUG_PLATFORM_FREE_FILE_MEMORY(DEBUGPlatformFreeFileMemory);
+
+#define DEBUG_PLATFORM_READ_ENTIRE_FILE(name) DEBUGReadFileResult name(char* filename)
+typedef DEBUG_PLATFORM_READ_ENTIRE_FILE(DEBUGPlatformReadEntireFile);
+
+#define DEBUG_PLATFORM_WRITE_ENTIRE_FILE(name) bool name(char* filename, uint32_t memory_size, void* memory)
+typedef DEBUG_PLATFORM_WRITE_ENTIRE_FILE(DEBUGPlatformWriteEntireFile);
+
 #endif
 
 /*
@@ -124,18 +130,31 @@ struct GameMemory {
     void* permanent_storage;    // NOTE(casey): REQUIRED to be cleared to zero at startup
     uint64_t transient_storage_size;
     void* transient_storage;    // NOTE(casey): REQUIRED to be cleared to zero at startup
+#if HANDMADE_DEVELOPER_BUILD
+    // NOTE(daniel): Function pointers
+    DEBUGPlatformFreeFileMemory* DEBUG_platform_free_file_memory;
+    DEBUGPlatformReadEntireFile* DEBUG_platform_read_entire_file;
+    DEBUGPlatformWriteEntireFile* DEBUG_platform_write_entire_file;
+#endif
 };
 
-void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer);
+#pragma warning(disable: 4100)
+#define GAME_UPDATE_AND_RENDER(name) void name(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer)
+typedef GAME_UPDATE_AND_RENDER(GameUpdateAndRender);
+GAME_UPDATE_AND_RENDER(game_update_and_render_stub) { }
 
 // NOTE(casey): At the moment, this has to be a bery fast function, it cannot be
 // more than a millisecond or so.
 // TODO(casey): Reduce the pressure on this function's performance by measuring it
 // or asking about it, etc.
-void game_get_sound_samples(GameMemory* memory, GameSoundOutputBuffer& sound_buffer);
+#define GAME_GET_SOUND_SAMPLES(name) void name(GameMemory* memory, GameSoundOutputBuffer& sound_buffer)
+typedef GAME_GET_SOUND_SAMPLES(GameGetSoundSamples);
+GAME_GET_SOUND_SAMPLES(game_get_sound_samples_stub) { }
+#pragma warning(default: 4100)
 
 struct GameState {
     uint32_t tone_hz;
     int green_offset;
     int blue_offset;
+    float tsine;
 };

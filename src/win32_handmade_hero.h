@@ -32,7 +32,6 @@ struct Win32SoundOutput {
     // TODO(casey): Math gets simpler if we add a "bytes_per_second" field?
 };
 
-
 struct Win32DEBUGTimeMarker {
     DWORD output_play_cursor;
     DWORD output_write_cursor;
@@ -43,5 +42,3 @@ struct Win32DEBUGTimeMarker {
     DWORD flip_play_cursor;
     DWORD flip_write_cursor;
 };
-
-DEBUGReadFileResult DEBUG_platform_read_entire_file(char* filename);
