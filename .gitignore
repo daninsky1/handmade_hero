@@ -389,5 +389,8 @@ FodyWeavers.xsd
 
 # daniel
 msvc/
+vside/
 src/tags
 *.ps1
+data/
+
