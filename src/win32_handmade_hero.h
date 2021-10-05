@@ -1,9 +1,12 @@
 #pragma once
 
 #include <windows.h>
-#include <Xinput.h>         // XBox joystick controller
+#include <Xinput.h>
 #include <dsound.h>
 #include <joystickapi.h>    // Generic joystick controller
+
+#include "handmade_hero.h"
+
 
 struct Win32OffscreenBuffer {
     // NOTE(casey): Pixels are always 32-bits wide, memory order BB GG RR XX
@@ -41,4 +44,14 @@ struct Win32DEBUGTimeMarker {
 
     DWORD flip_play_cursor;
     DWORD flip_write_cursor;
+};
+
+struct Win32GameLibrary {
+    HMODULE dll;
+    FILETIME dll_last_write_time;
+    // NOTE(daniel): Function types
+    GameUpdateAndRender* update_and_render;
+    GameGetSoundSamples* get_sound_samples;
+
+    bool is_valid;
 };

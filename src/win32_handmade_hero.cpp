@@ -71,6 +71,7 @@ static xinput_set_state* XInputSetState_ = XInputSetStateStub;
 #define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPGUID lpGuid, LPDIRECTSOUND* ppDS, LPUNKNOWN  pUnkOuter);
 typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
+#if HANDMADE_DEVELOPER_BUILD
 DEBUG_PLATFORM_FREE_FILE_MEMORY(DEBUG_platform_free_file_memory)
 {
     if (memory) {
@@ -138,48 +139,79 @@ DEBUG_PLATFORM_WRITE_ENTIRE_FILE(DEBUG_platform_write_entire_file)
 
     return result;
 }
+#endif
 
-struct Win32GameLibrary {
-    HMODULE game_library;
-    // NOTE(daniel): Function types
-    GameUpdateAndRender* update_and_render;
-    GameGetSoundSamples* get_sound_samples;
+inline FILETIME win32_get_last_write_time(const char* filename)
+{
+    FILETIME last_write_time = { };
 
-    bool is_valid;
-};
+    WIN32_FIND_DATA find_data;
+    HANDLE find_handle = FindFirstFileA(filename, &find_data);
+    if (find_handle != INVALID_HANDLE_VALUE) {
+        last_write_time = find_data.ftLastWriteTime;
+        FindClose(find_handle);
+    }
 
+    return last_write_time;
+}
+
+static void DEBUG_get_last_error_message(CHAR* msg, size_t size)
+{
+    // TODO(daniel); fmt_err handiling
+    DWORD err_code = GetLastError();
+    DWORD fmt_err = FormatMessageA(
+    FORMAT_MESSAGE_FROM_SYSTEM,
+    NULL, err_code,
+    LANG_USER_DEFAULT,
+    (LPTSTR)msg,
+    size,
+    NULL
+    );
+}
 // NOTE(daniel): warning 4191, disabled for GetProcAddress to avoid cast madness:
 // reinterpret_cast<funcptr>(reinterpret_cast<void*>(GetProcAddress(...))))
-
-static Win32GameLibrary win32_load_game_library()
+static bool win32_load_game_library(const char* dllname, Win32GameLibrary& game_lib)
 {
-    Win32GameLibrary result =  { };
+    bool error = false;
+    game_lib.dll_last_write_time = win32_get_last_write_time(dllname);
+    constexpr char* temp_dll_name = "handmade_hero_temp.dll";
 
-    CopyFile("handmade_hero.dll", "handmade_hero_temp.dll", FALSE);
-    result.game_library = LoadLibrary("handmade_hero_temp.dll");
-    if (result.game_library) {
+    // IMPORTANT(daniel): COPY FILE LOCK BUGGGGGGGGGGGGGGGGGGGGGGGGGGGGG
+    BOOL cp_err = CopyFile(dllname, temp_dll_name, FALSE);
+    if (!cp_err) {
+        error = true;
+    }
+
+    game_lib.dll = LoadLibraryA(temp_dll_name);
+    DWORD err_code = GetLastError();
+    CHAR last_err_msg[256];
+    DEBUG_get_last_error_message(last_err_msg, sizeof(last_err_msg));
+    OutputDebugStringA(last_err_msg);
+
+    if (game_lib.dll) {
 #pragma warning(disable: 4191)
-        result.update_and_render = reinterpret_cast<GameUpdateAndRender*>(
-            GetProcAddress(result.game_library, "game_update_and_render"));
-        result.get_sound_samples = reinterpret_cast<GameGetSoundSamples*>(
-            GetProcAddress(result.game_library, "game_get_sound_samples"));
+        game_lib.update_and_render = reinterpret_cast<GameUpdateAndRender*>(
+            GetProcAddress(game_lib.dll, "game_update_and_render"));
+        game_lib.get_sound_samples = reinterpret_cast<GameGetSoundSamples*>(
+            GetProcAddress(game_lib.dll, "game_get_sound_samples"));
 #pragma warning(default: 4191)
-        result.is_valid = result.update_and_render && result.get_sound_samples;
+        game_lib.is_valid = game_lib.update_and_render && game_lib.get_sound_samples;
     }
 
-    if (!result.is_valid) {
-        result.update_and_render = game_update_and_render_stub;
-        result.get_sound_samples = game_get_sound_samples_stub;
+    if (!game_lib.is_valid) {
+        error = true;
+        game_lib.update_and_render = game_update_and_render_stub;
+        game_lib.get_sound_samples = game_get_sound_samples_stub;
     }
 
-    return result;
+    return error;
 }
 
 static void win32_unload_game_library(Win32GameLibrary* game_lib)
 {
     if (game_lib) {
-        FreeLibrary(game_lib->game_library);
-        game_lib->game_library = 0;
+        FreeLibrary(game_lib->dll);
+        game_lib->dll = 0;
     }
     game_lib->is_valid = false;
     game_lib->update_and_render = game_update_and_render_stub;
@@ -735,7 +767,6 @@ int CALLBACK WinMain(HINSTANCE instance,
             int16_t* samples = reinterpret_cast<int16_t*>(
                 VirtualAlloc(0, sound_output.secondary_buffer_size, MEM_COMMIT, PAGE_READWRITE));
 
-
 #if HANDMADE_DEVELOPER_BUILD
             LPVOID base_address = reinterpret_cast<LPVOID>(TERABYTES(2ull));
 #else
@@ -745,11 +776,11 @@ int CALLBACK WinMain(HINSTANCE instance,
             game_memory.permanent_storage_size = MEGABYTES(64);
             game_memory.transient_storage_size = GIGABYTES(4ull);
             
+#if HANDMADE_DEVELOPER_BUILD
             game_memory.DEBUG_platform_free_file_memory = &DEBUG_platform_free_file_memory;
             game_memory.DEBUG_platform_read_entire_file = &DEBUG_platform_read_entire_file;
             game_memory.DEBUG_platform_write_entire_file = &DEBUG_platform_write_entire_file;
-            
-
+#endif
             uint64_t total_size = game_memory.permanent_storage_size + game_memory.transient_storage_size;
             game_memory.permanent_storage = VirtualAlloc(base_address, total_size,
                 MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -760,10 +791,10 @@ int CALLBACK WinMain(HINSTANCE instance,
                 GameInput xbox_input[2] = {};
                 GameInput* new_xbox_input = &xbox_input[0];
                 GameInput* old_xbox_input = &xbox_input[1];
-
+#if HANDMADE_DEVELOPER_BUILD
                 int DEBUG_time_markers_index = 0;
                 Win32DEBUGTimeMarker DEBUG_time_markers[game_update_hz / 2] = {};
-
+#endif
                 
                 DWORD audio_latency_bytes = 0;
                 float audio_latency_seconds = 0;
@@ -798,14 +829,40 @@ int CALLBACK WinMain(HINSTANCE instance,
                 /*GameInput* new_generic_input = &generic_input[0];
                 GameInput* old_generic_input = &generic_input[1];*/
 
-                Win32GameLibrary game_library = win32_load_game_library();
-                int load_counter = 0;
+                constexpr char* handmade_hero_dllname = "handmade_hero.dll";
+                Win32GameLibrary game_library = { };
+                bool game_load_err = win32_load_game_library(handmade_hero_dllname, game_library);
+                constexpr int load_max_tries = 2000;
+                int window_time_try = 30;
+                int load_try_count = 0;
+                bool load_try_start_counting = false;
+
+                char game_load_giving_up_msg[128];
+                sprintf_s(game_load_giving_up_msg, "Giving up after %d tries\n", load_max_tries);
 
                 while (glob_running) {
-                    if (load_counter++ > 120) {
+                    FILETIME dll_write_time = win32_get_last_write_time(handmade_hero_dllname);
+                    LONG file_comp = CompareFileTime(&dll_write_time, &game_library.dll_last_write_time);
+                    if (file_comp != 0) {
                         win32_unload_game_library(&game_library);
-                        game_library = win32_load_game_library();
-                        load_counter = 0;
+                        load_try_start_counting = true;
+                    }
+                    if (load_try_start_counting) {
+                        ++load_try_count;
+                        if (load_try_count % window_time_try == 0) {
+                            game_load_err = win32_load_game_library(handmade_hero_dllname, game_library);
+
+                            if ((load_try_count == load_max_tries) || !game_load_err) {
+                                if (load_try_count == load_max_tries)
+                                    OutputDebugStringA(game_load_giving_up_msg);
+                                load_try_start_counting = false;
+                                load_try_count = 0;
+                            }
+                            else {
+                                window_time_try += 10;
+                                load_try_count = 0;
+                            }
+                        }
                     }
 
                     // TODO(casey): Zeroing macro
@@ -1052,13 +1109,15 @@ int CALLBACK WinMain(HINSTANCE instance,
                             audio_latency_seconds = static_cast<float>(audio_latency_bytes)
                                 / static_cast<float>(sound_output.bytes_per_sample)
                                 / static_cast<float>(sound_output.sample_per_second);
+#if 0
 #pragma warning(disable: 4777)
                             char text_buffer[256];
                             sprintf_s(text_buffer, sizeof(text_buffer), "btl: %u tc: %u btw: %u - pc: %u wc: %u delta: %u (%fs)\n",
                                 byte_to_lock, target_cursor, bytes_to_write, play_cursor, write_cursor,
-#pragma warning(default: 4777)
                                 audio_latency_bytes, audio_latency_seconds);
+#pragma warning(default: 4777)
                             OutputDebugStringA(text_buffer);
+#endif
 #endif
                             win32_fill_sound_buffer(sound_output, byte_to_lock, bytes_to_write, sound_buffer);
                         }
@@ -1109,13 +1168,14 @@ int CALLBACK WinMain(HINSTANCE instance,
 #if HANDMADE_DEVELOPER_BUILD
                         // NOTE(casey): This is debug code
                         {
-                            DWORD play_cursor;
-                            DWORD write_cursor;
-                            if (glob_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor) == DS_OK) {
+                            DWORD debug_play_cursor;
+                            DWORD debug_write_cursor;
+                            if (glob_secondary_buffer->GetCurrentPosition(&debug_play_cursor, &debug_write_cursor) == DS_OK) {
                                 ASSERT(DEBUG_time_markers_index < ARRAY_COUNT(DEBUG_time_markers));
+
                                 Win32DEBUGTimeMarker* marker = &DEBUG_time_markers[DEBUG_time_markers_index];
-                                marker->flip_play_cursor = play_cursor;
-                                marker->flip_write_cursor = write_cursor;
+                                marker->flip_play_cursor = debug_play_cursor;
+                                marker->flip_write_cursor = debug_write_cursor;
                             }
                         }
 #endif
@@ -1131,10 +1191,11 @@ int CALLBACK WinMain(HINSTANCE instance,
 
                         double fpsf = 0.0f;
                         double mcpff = static_cast<double>(cycles_elapsed) / (1000.0 * 1000.0);        // Mega Cycles Per Frame
-
+#if 0
                         char fps_buffer[256];
                         sprintf_s(fps_buffer, sizeof(fps_buffer), "%.02fmsec/f, %.02ffps, %.02fmcpf - \n", msec_per_framef, fpsf, mcpff);
                         OutputDebugStringA(fps_buffer);
+#endif
 #if HANDMADE_DEVELOPER_BUILD
                         ++DEBUG_time_markers_index;
                         if (DEBUG_time_markers_index == ARRAY_COUNT(DEBUG_time_markers)) {

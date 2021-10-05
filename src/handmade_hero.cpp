@@ -8,7 +8,7 @@ void game_output_sound(GameState* game_state, GameSoundOutputBuffer& sound_buffe
 
     int16_t* sample_out = sound_buffer.samples;
     for (uint32_t sample_i = 0; sample_i < sound_buffer.sample_count; ++sample_i) {
-        float sine_value = std::sinf(game_state->tsine);
+        float sine_value = sinf(game_state->tsine);
         int16_t sample_value = static_cast<int16_t>(sine_value * tone_volume);
         *sample_out++ = sample_value;
         *sample_out++ = sample_value;
@@ -29,8 +29,8 @@ void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff)
             uint8_t blue = static_cast<uint8_t>(x + xoff);
             uint8_t green = static_cast<uint8_t>(y + yoff);
             // NOTE(daniel): I found a Fractal:
-            //*pixel++ = static_cast<uint32_t>((green << 32) | blue);
-            *pixel++ = static_cast<uint32_t>((green << 8) | blue);
+            //*pixel++ = static_cast<uint32_t>((green) | blue);
+            *pixel++ = static_cast<uint32_t>((green << 0) | blue);
         }
         row += buffer.pitch;
     }
@@ -45,11 +45,13 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
     if (!memory->is_initialized) {
         char* file_name = __FILE__;
 
+#if DEVELOPER_BUILD
         DEBUGReadFileResult file = memory->DEBUG_platform_read_entire_file(file_name);
         if (file.content) {
             memory->DEBUG_platform_write_entire_file("test.txt", file.content_size, file.content);
             memory->DEBUG_platform_free_file_memory(file.content);
         }
+#endif
 
         game_state->tone_hz = 110;
         game_state->tsine = 0.0f;
@@ -97,8 +99,8 @@ BOOL WINAPI DllMain(
     LPVOID)  // reserved
 {
     // Perform actions based on the reason for calling.
-    switch( fdwReason ) 
-    { 
+    switch( fdwReason )
+    {
         case DLL_PROCESS_ATTACH:
          // Initialize once for each new process.
          // Return FALSE to fail DLL load.
