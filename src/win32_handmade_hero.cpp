@@ -181,10 +181,7 @@ static bool win32_load_game_library(const char* dllname, Win32GameLibrary& game_
     // our process and never been released.
     // A fast correction is to not store this return value until we find a
     // better way to do it
-    BOOL cp_err = CopyFile(dllname, temp_dll_name, FALSE);
-    if (!cp_err) {
-        error = true;
-    }
+    CopyFile(dllname, temp_dll_name, FALSE);
 
     game_lib.dll = LoadLibraryA(temp_dll_name);
     DWORD err_code = GetLastError();

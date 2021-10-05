@@ -49,7 +49,7 @@ void render_player(GameOffscreenBuffer* buffer, int playerx, int playery)
             + x * buffer->bytes_per_pixel
             + top * buffer->pitch;
         for (int y = top; y < bottom; ++y) {
-            *reinterpret_cast<uint32_t*>(pixel) = color;
+           *reinterpret_cast<uint32_t*>(pixel) = color;
             pixel += buffer->pitch;
         }
     }
