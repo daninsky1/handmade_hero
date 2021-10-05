@@ -870,8 +870,8 @@ int CALLBACK WinMain(HINSTANCE instance,
 
                     // TODO(casey): Zeroing macro
                     // TODO(casey): We can't zero everything because the up/down state will be wrong!!!
-                    GameControllerInput* old_keyboard_controller = &old_game_input->controllers[0];
-                    GameControllerInput* new_keyboard_controller = &new_game_input->controllers[0];
+                    GameControllerInput* old_keyboard_controller = get_controller(old_game_input, 0);
+                    GameControllerInput* new_keyboard_controller = get_controller(new_game_input, 0);
                     *new_keyboard_controller = {};
                     new_keyboard_controller->is_connected = true;
                     for (int button_index = 0; button_index < ARRAY_COUNT(new_keyboard_controller->buttons); ++button_index) {
@@ -976,8 +976,8 @@ int CALLBACK WinMain(HINSTANCE instance,
                         // NOTE(daniel): my generic controller input
                         // NOTE(daniel): This is playstation 2 nomenclatures
                         // TODO(daniel): Check this controller array possition
-                        GameControllerInput* old_joypad_controller = &old_game_input->controllers[6];
-                        GameControllerInput* new_joypad_controller = &new_game_input->controllers[6];
+                        GameControllerInput* old_joypad_controller = get_controller(old_game_input, 5);
+                        GameControllerInput* new_joypad_controller = get_controller(old_game_input, 5);
 
                         // NOTE(daniel): Get joypad state
                         if (joyGetPosEx(joystick_id, &joyinfoex) != JOYERR_UNPLUGGED) {

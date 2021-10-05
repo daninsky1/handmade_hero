@@ -99,8 +99,22 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
             }
         }
         
-        game_state->playerx += static_cast<int>(4.0f * controller->stick_averagex);
+        game_state->playerx -= static_cast<int>(4.0f * controller->stick_averagex);
         game_state->playery -= static_cast<int>(4.0f * controller->stick_averagey);
+
+        int move_step = 1;
+        if (controller->move_up.ended_down) {
+            game_state->playery -= move_step;
+        }
+        if (controller->move_down.ended_down) {
+            game_state->playery += move_step;
+        }
+        if (controller->move_left.ended_down) {
+            game_state->playerx -= move_step;
+        }
+        if (controller->move_right.ended_down) {
+            game_state->playerx += move_step;
+        }
 
         if (controller->action_down.ended_down) {
             game_state->playery -= 10;
