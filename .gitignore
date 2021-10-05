@@ -393,4 +393,4 @@ vside/
 src/tags
 *.ps1
 data/
-
+*.swp

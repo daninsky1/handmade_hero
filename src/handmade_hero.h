@@ -10,6 +10,8 @@
 *   0 - Slow code welcome.
 *   1 - Not slow code allowed!
 */
+#include <windows.h>
+#include <stdio.h>
 
 #include <cstdint>
 #define _USE_MATH_DEFINES
@@ -68,6 +70,7 @@ struct GameOffscreenBuffer {
     int width;
     int height;
     int pitch;
+    int bytes_per_pixel;
 };
 
 struct GameSoundOutputBuffer {
@@ -114,7 +117,7 @@ struct GameControllerInput{
 
 struct GameInput {
     // TODO(casey): Insert clock values here
-    GameControllerInput controllers[5];
+    GameControllerInput controllers[6];
 };
 
 inline GameControllerInput* get_controller(GameInput* input, uint32_t controller_index)
@@ -156,5 +159,9 @@ struct GameState {
     uint32_t tone_hz;
     int green_offset;
     int blue_offset;
+
     float tsine;
+
+    int playerx;
+    int playery;
 };

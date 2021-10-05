@@ -16,7 +16,7 @@
 * Hardware acceleration (OpenGL or Direct3D or BOTH??)
 * GetKeyboardLayout (for French keyboards, international WASD support)
 * 
-* Just a partial list of stuff!!
+* just a partial list of stuff!!
 */
 
 #include "handmade_hero_config.h"
@@ -176,7 +176,11 @@ static bool win32_load_game_library(const char* dllname, Win32GameLibrary& game_
     game_lib.dll_last_write_time = win32_get_last_write_time(dllname);
     constexpr char* temp_dll_name = "handmade_hero_temp.dll";
 
-    // IMPORTANT(daniel): COPY FILE LOCK BUGGGGGGGGGGGGGGGGGGGGGGGGGGGGG
+    // IMPORTANT(daniel): BUG:
+    // Storing CopyFile() return error status causes the file to get lock in
+    // our process and never been released.
+    // A fast correction is to not store this return value until we find a
+    // better way to do it
     BOOL cp_err = CopyFile(dllname, temp_dll_name, FALSE);
     if (!cp_err) {
         error = true;
@@ -491,14 +495,17 @@ void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock,
 static void win32_process_keyboard_message(GameButtonState& new_state, bool is_down)
 {
     //ASSERT(new_state.ended_down != is_down);
+    //char msg[128];
+    //sprintf(msg, "%d\n", is_down);
+    //OutputDebugString(msg);
     new_state.ended_down = is_down;
     ++new_state.half_transition;
 }
 
-static void win32_process_xinput_digital_button(DWORD xinput_button_state, GameButtonState& old_state,
+static void win32_process_digital_button(DWORD button_state, GameButtonState& old_state,
     DWORD button_bit, GameButtonState& new_state)
 {
-    new_state.ended_down = (xinput_button_state & button_bit) != 0;
+    new_state.ended_down = (button_state & button_bit) != 0;
     new_state.half_transition = (old_state.ended_down != new_state.ended_down) ? 1 : 0;
 }
 
@@ -573,7 +580,7 @@ void win32_process_pending_messages(GameControllerInput* keyboard_controller)
     }
 }
 
-static float win32_process_xinput_stick_value(SHORT value, SHORT deadzone_threshold)
+static float win32_process_stick_value(SHORT value, SHORT deadzone_threshold)
 {
     float result = 0;
     if (value < -deadzone_threshold)
@@ -788,9 +795,9 @@ int CALLBACK WinMain(HINSTANCE instance,
                 + game_memory.permanent_storage_size;
 
             if (samples && game_memory.permanent_storage && game_memory.transient_storage) {
-                GameInput xbox_input[2] = {};
-                GameInput* new_xbox_input = &xbox_input[0];
-                GameInput* old_xbox_input = &xbox_input[1];
+                GameInput game_inputs[2] = {};
+                GameInput* new_game_input = &game_inputs[0];
+                GameInput* old_game_input = &game_inputs[1];
 #if HANDMADE_DEVELOPER_BUILD
                 int DEBUG_time_markers_index = 0;
                 Win32DEBUGTimeMarker DEBUG_time_markers[game_update_hz / 2] = {};
@@ -824,10 +831,6 @@ int CALLBACK WinMain(HINSTANCE instance,
 
                 joyinfoex.dwSize = sizeof(joyinfoex);
                 joyinfoex.dwFlags = JOY_RETURNBUTTONS | JOY_RETURNX | JOY_RETURNY | JOY_RETURNPOV;
-
-                GameInput generic_input[2] = {};
-                /*GameInput* new_generic_input = &generic_input[0];
-                GameInput* old_generic_input = &generic_input[1];*/
 
                 constexpr char* handmade_hero_dllname = "handmade_hero.dll";
                 Win32GameLibrary game_library = { };
@@ -867,8 +870,8 @@ int CALLBACK WinMain(HINSTANCE instance,
 
                     // TODO(casey): Zeroing macro
                     // TODO(casey): We can't zero everything because the up/down state will be wrong!!!
-                    GameControllerInput* old_keyboard_controller = &new_xbox_input->controllers[0];
-                    GameControllerInput* new_keyboard_controller = &new_xbox_input->controllers[0];
+                    GameControllerInput* old_keyboard_controller = &old_game_input->controllers[0];
+                    GameControllerInput* new_keyboard_controller = &new_game_input->controllers[0];
                     *new_keyboard_controller = {};
                     new_keyboard_controller->is_connected = true;
                     for (int button_index = 0; button_index < ARRAY_COUNT(new_keyboard_controller->buttons); ++button_index) {
@@ -880,14 +883,14 @@ int CALLBACK WinMain(HINSTANCE instance,
                     if (!glob_pause) {
                         // TODO(casey): Should we poll this more frequently?
                         DWORD max_controller_count = 1 + XUSER_MAX_COUNT;
-                        if (max_controller_count > (ARRAY_COUNT(new_xbox_input->controllers) - 1)) {
-                            max_controller_count = ARRAY_COUNT(new_xbox_input->controllers) - 1;
+                        if (max_controller_count > (ARRAY_COUNT(new_game_input->controllers) - 1)) {
+                            max_controller_count = ARRAY_COUNT(new_game_input->controllers) - 1;
                         }
 
-                        for (DWORD controller_index = 0; controller_index < max_controller_count; ++controller_index) {
+                        for (DWORD controller_index = 1; controller_index < max_controller_count; ++controller_index) {
                             /*DWORD our_controller_index = 1 + max_controller_count;*/
-                            GameControllerInput* old_xbox_controller = get_controller(old_xbox_input, controller_index);
-                            GameControllerInput* new_xbox_controller = get_controller(new_xbox_input, controller_index);
+                            GameControllerInput* old_xbox_controller = get_controller(old_game_input, controller_index);
+                            GameControllerInput* new_xbox_controller = get_controller(new_game_input, controller_index);
 
                             XINPUT_STATE controller_state;
                             if (XInputGetState(controller_index, &controller_state) == ERROR_SUCCESS) {
@@ -903,8 +906,8 @@ int CALLBACK WinMain(HINSTANCE instance,
                                 bool gpad_left = pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
 #pragma warning(default:4189)
                                 new_xbox_controller->is_analog = true;
-                                new_xbox_controller->stick_averagex = win32_process_xinput_stick_value(pad->sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
-                                new_xbox_controller->stick_averagey = win32_process_xinput_stick_value(pad->sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                                new_xbox_controller->stick_averagex = win32_process_stick_value(pad->sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                                new_xbox_controller->stick_averagey = win32_process_stick_value(pad->sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
 
                                 if ((new_xbox_controller->stick_averagex != 0.0f) || (new_xbox_controller->stick_averagey != 0.0f)) {
                                     new_xbox_controller->is_analog = true;
@@ -928,31 +931,31 @@ int CALLBACK WinMain(HINSTANCE instance,
 
 
                                 float threshold = 0.5f;
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_down,
+                                win32_process_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_down,
                                     1ul, new_xbox_controller->move_down);
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_up,
+                                win32_process_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_up,
                                     1ul, new_xbox_controller->move_up);
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_left,
+                                win32_process_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_left,
                                     1ul, new_xbox_controller->move_left);
-                                win32_process_xinput_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_right,
+                                win32_process_digital_button((new_xbox_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_xbox_controller->move_right,
                                     1ul, new_xbox_controller->move_right);
 
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_down,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->action_down,
                                     XINPUT_GAMEPAD_A, new_xbox_controller->action_down);
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_right,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->action_right,
                                     XINPUT_GAMEPAD_B, new_xbox_controller->action_right);
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_left,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->action_left,
                                     XINPUT_GAMEPAD_X, new_xbox_controller->action_left);
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->action_up,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->action_up,
                                     XINPUT_GAMEPAD_Y, new_xbox_controller->action_up);
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->left_shoulder,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->left_shoulder,
                                     XINPUT_GAMEPAD_LEFT_SHOULDER, new_xbox_controller->left_shoulder);
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->right_shoulder,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->right_shoulder,
                                     XINPUT_GAMEPAD_RIGHT_SHOULDER, new_xbox_controller->right_shoulder);
 
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->back,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->back,
                                     XINPUT_GAMEPAD_BACK, new_xbox_controller->back);
-                                win32_process_xinput_digital_button(pad->wButtons, old_xbox_controller->start,
+                                win32_process_digital_button(pad->wButtons, old_xbox_controller->start,
                                     XINPUT_GAMEPAD_START, new_xbox_controller->start);
 
                                 // bool gpad_start      = pad->wButtons & XINPUT_GAMEPAD_START;
@@ -972,31 +975,53 @@ int CALLBACK WinMain(HINSTANCE instance,
 #endif
                         // NOTE(daniel): my generic controller input
                         // NOTE(daniel): This is playstation 2 nomenclatures
+                        // TODO(daniel): Check this controller array possition
+                        GameControllerInput* old_joypad_controller = &old_game_input->controllers[6];
+                        GameControllerInput* new_joypad_controller = &new_game_input->controllers[6];
 
+                        // NOTE(daniel): Get joypad state
                         if (joyGetPosEx(joystick_id, &joyinfoex) != JOYERR_UNPLUGGED) {
-                            /*GameControllerInput* old_generic_controller = &old_generic_input->controllers[0];
-                            GameControllerInput* new_generic_controller = &new_generic_input->controllers[0];*/
-                            // TODO(daniel): BUG: limited dpad directions
-                            // Joystick dpad
+                            new_joypad_controller->is_analog = true;
+                            // NOTE(daniel): Using a guess deadzone value to a generic joypad, maybe
+                            // this can be an game option to address unpredictable joypad deadzones
+                            // NOTE(daniel): joypad analog normalisation to signed short values like the xinput
+                            int64_t s_joypad_lanalogx = static_cast<int64_t>(UINT16_MAX / 2 - joyinfoex.dwXpos);   // signed values
+                            int64_t s_joypad_lanalogy = static_cast<int64_t>(UINT16_MAX / 2 - joyinfoex.dwYpos);
+                            new_joypad_controller->stick_averagex = win32_process_stick_value(s_joypad_lanalogx, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE/2);
+                            new_joypad_controller->stick_averagey = win32_process_stick_value(s_joypad_lanalogy, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE/2);
 #pragma warning(disable:4189)
-                            bool generic_gpad_down = joyinfoex.dwPOV == JOY_POVBACKWARD;
-                            bool generic_gpad_up = joyinfoex.dwPOV == JOY_POVFORWARD;
-                            bool generic_gpad_left = joyinfoex.dwPOV == JOY_POVLEFT;
-                            bool generic_gpad_right = joyinfoex.dwPOV == JOY_POVRIGHT;
+                            // Joystick dpad
+                            // TODO(daniel): BUG: limited dpad directions
+                            // BUG: how do the xinput process digital directional buttons?
+                            float threshold = 0.5f;
+                            win32_process_digital_button((new_joypad_controller->stick_averagex < -threshold) ? 1ul : 0ul, old_joypad_controller->move_down,
+                                1ul, new_joypad_controller->move_down);
+                            bool joypad_down = joyinfoex.dwPOV == JOY_POVBACKWARD;
+                            bool joypad_up = joyinfoex.dwPOV == JOY_POVFORWARD;
+                            bool joypad_left = joyinfoex.dwPOV == JOY_POVLEFT;
+                            bool joypad_right = joyinfoex.dwPOV == JOY_POVRIGHT;
+
                             // Joystick buttons
-                            bool generic_gpad_tri = joyinfoex.dwButtons & JOY_BUTTON1;
-                            bool generic_gpad_cir = joyinfoex.dwButtons & JOY_BUTTON2;
-                            bool generic_gpad_x = joyinfoex.dwButtons & JOY_BUTTON3;
-                            bool generic_gpad_sq = joyinfoex.dwButtons & JOY_BUTTON4;
-                            bool generic_gpad_l2 = joyinfoex.dwButtons & JOY_BUTTON5;
-                            bool generic_gpad_r2 = joyinfoex.dwButtons & JOY_BUTTON6;
-                            bool generic_gpad_l1 = joyinfoex.dwButtons & JOY_BUTTON7;
-                            bool generic_gpad_r1 = joyinfoex.dwButtons & JOY_BUTTON8;
-                            // Joystick left analog x and y
-                            uint64_t u_generic_gpad_lanalogx = joyinfoex.dwXpos;    // unsigned values
-                            uint64_t u_generic_gpad_lanalogy = joyinfoex.dwYpos;
-                            int64_t s_generic_gpad_lanalogx = static_cast<int64_t>(UINT16_MAX / 2 - u_generic_gpad_lanalogx);   // signed values
-                            int64_t s_generic_gpad_lanalogy = static_cast<int64_t>(UINT16_MAX / 2 - u_generic_gpad_lanalogy);
+                            // Triangle
+                            win32_process_digital_button(joyinfoex.dwButtons, old_joypad_controller->action_up,
+                                JOY_BUTTON1, new_joypad_controller->action_up);
+                            // Circle
+                            win32_process_digital_button(joyinfoex.dwButtons, old_joypad_controller->action_right,
+                                JOY_BUTTON2, new_joypad_controller->action_right);
+                            // X
+                            win32_process_digital_button(joyinfoex.dwButtons, old_joypad_controller->action_down,
+                                JOY_BUTTON3, new_joypad_controller->action_down);
+                            // Square
+                            win32_process_digital_button(joyinfoex.dwButtons, old_joypad_controller->action_left,
+                                JOY_BUTTON4, new_joypad_controller->action_left);
+                            // L1
+                            win32_process_digital_button(joyinfoex.dwButtons, old_joypad_controller->left_shoulder,
+                                JOY_BUTTON5, new_joypad_controller->left_shoulder);
+                            // L2
+                            win32_process_digital_button(joyinfoex.dwButtons, old_joypad_controller->right_shoulder,
+                                JOY_BUTTON6, new_joypad_controller->right_shoulder);
+                            
+                            // TODO(daniel): Process start and select
 #pragma warning(default:4189)
                         }
 
@@ -1005,10 +1030,11 @@ int CALLBACK WinMain(HINSTANCE instance,
                         buffer.width = glob_backbuffer.width;
                         buffer.height = glob_backbuffer.height;
                         buffer.pitch = glob_backbuffer.pitch;
-                        game_library.update_and_render(&game_memory, new_xbox_input, buffer);
+                        buffer.bytes_per_pixel = glob_backbuffer.bytes_per_pixel;
+                        game_library.update_and_render(&game_memory, new_game_input, buffer);
 
                         LARGE_INTEGER audio_wall_clock = win32_get_wall_clock();
-                        /*float from_begin_to_audio_sec= 1000.0f * win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);*/
+                        /*float from_begin_to_audio_sec = 1000.0f * win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);*/
 
                         DWORD play_cursor;
                         DWORD write_cursor;
@@ -1179,9 +1205,9 @@ int CALLBACK WinMain(HINSTANCE instance,
                             }
                         }
 #endif
-                        GameInput* temp = new_xbox_input;
-                        new_xbox_input = old_xbox_input;
-                        old_xbox_input = temp;
+                        GameInput* temp = new_game_input;
+                        new_game_input = old_game_input;
+                        old_game_input = temp;
                         // TODO(casey): Should I clear these here?
 
 

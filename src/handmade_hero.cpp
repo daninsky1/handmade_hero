@@ -8,8 +8,12 @@ void game_output_sound(GameState* game_state, GameSoundOutputBuffer& sound_buffe
 
     int16_t* sample_out = sound_buffer.samples;
     for (uint32_t sample_i = 0; sample_i < sound_buffer.sample_count; ++sample_i) {
+#if 0
         float sine_value = sinf(game_state->tsine);
         int16_t sample_value = static_cast<int16_t>(sine_value * tone_volume);
+#else
+        int16_t sample_value = 0;
+#endif
         *sample_out++ = sample_value;
         *sample_out++ = sample_value;
 
@@ -26,13 +30,28 @@ void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff)
 
     for (int y = 0; y < buffer.height; ++y) {
         for (int x = 0; x < buffer.width; ++x) {
-            uint8_t blue = static_cast<uint8_t>(x + xoff);
+
             uint8_t green = static_cast<uint8_t>(y + yoff);
-            // NOTE(daniel): I found a Fractal:
-            //*pixel++ = static_cast<uint32_t>((green) | blue);
+            uint8_t blue = static_cast<uint8_t>(x + xoff);
             *pixel++ = static_cast<uint32_t>((green << 0) | blue);
         }
         row += buffer.pitch;
+    }
+}
+
+void render_player(GameOffscreenBuffer* buffer, int playerx, int playery)
+{
+    uint32_t color = 0xFFFFFFFF;
+    int top = playery;
+    int bottom = playery + 10;
+    for (int x = playerx; x < playerx+10; ++x) {
+        uint8_t* pixel = static_cast<uint8_t*>(buffer->memory)
+            + x * buffer->bytes_per_pixel
+            + top * buffer->pitch;
+        for (int y = top; y < bottom; ++y) {
+            *reinterpret_cast<uint32_t*>(pixel) = color;
+            pixel += buffer->pitch;
+        }
     }
 }
 
@@ -56,10 +75,13 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
         game_state->tone_hz = 110;
         game_state->tsine = 0.0f;
 
+        game_state->playerx = 100;
+        game_state->playery = 100;
+
         // TODO(casey): This may be more appropriate to do in the pratform layer
         memory->is_initialized = true;
     }
-
+    
     for (uint32_t controller_index = 0; controller_index < ARRAY_COUNT(input->controllers); ++controller_index) {
         GameControllerInput* controller = get_controller(input, controller_index);
         if (controller->is_analog) {
@@ -76,13 +98,17 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
                 game_state->blue_offset += 1;
             }
         }
+        
+        game_state->playerx += static_cast<int>(4.0f * controller->stick_averagex);
+        game_state->playery -= static_cast<int>(4.0f * controller->stick_averagey);
 
         if (controller->action_down.ended_down) {
-            game_state->green_offset += 1;
+            game_state->playery -= 10;
         }
     }
     // TODO(casey): Allow sample offsets here for more robust platform options
     render_test_gradient(buffer, game_state->blue_offset, game_state->green_offset);
+    render_player(&buffer, game_state->playerx, game_state->playery);
 }
 
 extern "C" GAME_GET_SOUND_SAMPLES(game_get_sound_samples)
