@@ -394,3 +394,5 @@ src/tags
 *.ps1
 data/
 *.swp
+*.vim
+tags

@@ -33,7 +33,7 @@ void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff)
 
             uint8_t green = static_cast<uint8_t>(y + yoff);
             uint8_t blue = static_cast<uint8_t>(x + xoff);
-            *pixel++ = static_cast<uint32_t>((green << 0) | blue);
+            *pixel++ = static_cast<uint32_t>((green << 8) | blue);
         }
         row += buffer.pitch;
     }
@@ -41,6 +41,8 @@ void render_test_gradient(GameOffscreenBuffer& buffer, int xoff, int yoff)
 
 void render_player(GameOffscreenBuffer* buffer, int playerx, int playery)
 {
+    uint8_t* end_of_buffer = static_cast<uint8_t*>(buffer->memory)
+        + buffer->height * buffer->pitch;
     uint32_t color = 0xFFFFFFFF;
     int top = playery;
     int bottom = playery + 10;
@@ -49,7 +51,9 @@ void render_player(GameOffscreenBuffer* buffer, int playerx, int playery)
             + x * buffer->bytes_per_pixel
             + top * buffer->pitch;
         for (int y = top; y < bottom; ++y) {
-           *reinterpret_cast<uint32_t*>(pixel) = color;
+            if ((pixel >= buffer->memory) && (pixel < end_of_buffer)) {
+                *reinterpret_cast<uint32_t*>(pixel) = color;
+            }
             pixel += buffer->pitch;
         }
     }
@@ -98,11 +102,8 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
                 game_state->blue_offset += 1;
             }
         }
-        
-        game_state->playerx -= static_cast<int>(4.0f * controller->stick_averagex);
-        game_state->playery -= static_cast<int>(4.0f * controller->stick_averagey);
 
-        int move_step = 1;
+        float move_step = 6.0f;
         if (controller->move_up.ended_down) {
             game_state->playery -= move_step;
         }
@@ -116,9 +117,16 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
             game_state->playerx += move_step;
         }
 
-        if (controller->action_down.ended_down) {
-            game_state->playery -= 10;
+        game_state->playerx += static_cast<int>(move_step * controller->stick_averagex);
+        game_state->playery -= static_cast<int>(move_step * controller->stick_averagey);
+
+        if (game_state->tjump > 0) {
+            game_state->playery += static_cast<int>(5.0f * sinf(0.5f*M_PI*game_state->tjump));
         }
+        if (controller->action_down.ended_down) {
+            game_state->tjump = 4.0f;
+        }
+        game_state->tjump -= 0.033f;
     }
     // TODO(casey): Allow sample offsets here for more robust platform options
     render_test_gradient(buffer, game_state->blue_offset, game_state->green_offset);

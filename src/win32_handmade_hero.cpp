@@ -72,6 +72,24 @@ static xinput_set_state* XInputSetState_ = XInputSetStateStub;
 typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 #if HANDMADE_DEVELOPER_BUILD
+void DEBUG_print_last_error()
+{
+    // TODO(daniel); fmt_err handiling
+    DWORD err_code = GetLastError();
+    CHAR msg[256];
+
+    DWORD fmt_err = FormatMessageA(
+        FORMAT_MESSAGE_FROM_SYSTEM,
+        NULL, err_code,
+        LANG_USER_DEFAULT,
+        (LPTSTR)msg,
+        256,
+        NULL
+    );
+
+    OutputDebugStringA(msg);
+}
+
 DEBUG_PLATFORM_FREE_FILE_MEMORY(DEBUG_platform_free_file_memory)
 {
     if (memory) {
@@ -155,19 +173,6 @@ inline FILETIME win32_get_last_write_time(const char* filename)
     return last_write_time;
 }
 
-static void DEBUG_get_last_error_message(CHAR* msg, size_t size)
-{
-    // TODO(daniel); fmt_err handiling
-    DWORD err_code = GetLastError();
-    DWORD fmt_err = FormatMessageA(
-    FORMAT_MESSAGE_FROM_SYSTEM,
-    NULL, err_code,
-    LANG_USER_DEFAULT,
-    (LPTSTR)msg,
-    size,
-    NULL
-    );
-}
 // NOTE(daniel): warning 4191, disabled for GetProcAddress to avoid cast madness:
 // reinterpret_cast<funcptr>(reinterpret_cast<void*>(GetProcAddress(...))))
 static bool win32_load_game_library(const char* dllname, Win32GameLibrary& game_lib)
@@ -184,10 +189,6 @@ static bool win32_load_game_library(const char* dllname, Win32GameLibrary& game_
     CopyFile(dllname, temp_dll_name, FALSE);
 
     game_lib.dll = LoadLibraryA(temp_dll_name);
-    DWORD err_code = GetLastError();
-    CHAR last_err_msg[256];
-    DEBUG_get_last_error_message(last_err_msg, sizeof(last_err_msg));
-    OutputDebugStringA(last_err_msg);
 
     if (game_lib.dll) {
 #pragma warning(disable: 4191)
@@ -335,8 +336,8 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
 
     buffer.width = w;
     buffer.height = h;
-    int byter_per_pixel = 4;
-    buffer.bytes_per_pixel = byter_per_pixel;
+    int bytes_per_pixel = 4;
+    buffer.bytes_per_pixel = bytes_per_pixel;
 
     buffer.info.bmiHeader.biSize = sizeof(buffer.info.bmiHeader);
     buffer.info.bmiHeader.biWidth = buffer.width;
@@ -345,9 +346,9 @@ static void win32_resize_dib_section(Win32OffscreenBuffer& buffer, int w, int h)
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = BI_RGB;
 
-    size_t bitmap_memory_sz = static_cast<size_t>(buffer.width * buffer.height * byter_per_pixel);
+    size_t bitmap_memory_sz = static_cast<size_t>(buffer.width * buffer.height * bytes_per_pixel);
     buffer.memory = VirtualAlloc(0, bitmap_memory_sz, MEM_COMMIT, PAGE_READWRITE);
-    buffer.pitch = w * byter_per_pixel;
+    buffer.pitch = w * bytes_per_pixel;
 
     // TODO(casey): Probably clear this to black
 }
@@ -368,6 +369,7 @@ static void win32_display_buffer_in_window(Win32OffscreenBuffer& buffer,
                   DIB_RGB_COLORS, SRCCOPY);
 }
 
+
 LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
                                            UINT   message,
                                            WPARAM w_parameter,
@@ -385,6 +387,14 @@ LRESULT CALLBACK win32_main_window_proc_cb(HWND   window,
         // TODO:(casey): Handle this with a message to the user?
         glob_running = false;
         OutputDebugString("WM_CLOSE\n");
+        break;
+    case WM_ACTIVATEAPP:
+#if HANDMADE_DEVELOPER_BUILD
+        if (w_parameter)
+            SetLayeredWindowAttributes(window, RGB(0, 0, 0), 255, LWA_ALPHA);
+        else
+            SetLayeredWindowAttributes(window, RGB(0, 0, 0), 64, LWA_ALPHA);
+#endif
         break;
     case WM_DESTROY:
         // TODO(casey): Handle this as an error - recreate window?
@@ -489,6 +499,7 @@ void win32_fill_sound_buffer(Win32SoundOutput& sound_output, DWORD byte_to_lock,
         glob_secondary_buffer->Unlock(region1, region1sz, region2, region2sz);
     }
 }
+
 static void win32_process_keyboard_message(GameButtonState& new_state, bool is_down)
 {
     //ASSERT(new_state.ended_down != is_down);
@@ -505,8 +516,71 @@ static void win32_process_digital_button(DWORD button_state, GameButtonState& ol
     new_state.ended_down = (button_state & button_bit) != 0;
     new_state.half_transition = (old_state.ended_down != new_state.ended_down) ? 1 : 0;
 }
+//
+// RECORD INPUT
+//
+void win32_begin_recording_input(Win32State* win32_state, int input_recording_index) {
+    win32_state->input_recording_index = input_recording_index;
 
-void win32_process_pending_messages(GameControllerInput* keyboard_controller)
+    char* filename = "input.hmi";
+    win32_state->recording_handle = 
+        CreateFile(filename, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, 0, CREATE_ALWAYS, 0, 0);
+
+    DWORD bytes_to_write = static_cast<DWORD>(win32_state->total_size);
+    ASSERT(win32_state->total_size == bytes_to_write);
+    DWORD bytes_written;
+    WriteFile(win32_state->recording_handle, win32_state->game_memory_block, bytes_to_write, &bytes_written, 0);
+}
+
+void win32_end_recording_input(Win32State* win32_state) {
+    CloseHandle(win32_state->recording_handle);
+    win32_state->input_recording_index = 0;
+}
+
+void win32_begin_input_playback(Win32State* win32_state, int input_playing_index)
+{
+    win32_state->input_playing_index = input_playing_index;
+
+    char* filename = "input.hmi";
+    win32_state->playback_handle = 
+        CreateFile(filename, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+    DEBUG_print_last_error();
+
+    DWORD bytes_to_read = static_cast<DWORD>(win32_state->total_size);
+    ASSERT(win32_state->total_size == bytes_to_read);
+    DWORD bytes_read;
+    ReadFile(win32_state->playback_handle, win32_state->game_memory_block, bytes_to_read, &bytes_read, 0);
+
+    DEBUG_print_last_error();
+}
+
+void win32_end_input_playback(Win32State* win32_state)
+{
+    CloseHandle(win32_state->playback_handle);
+    win32_state->input_playing_index = 0;
+}
+
+void win32_record_input(Win32State* win32_state, GameInput* new_game_input)
+{
+    DWORD bytes_written;
+    WriteFile(win32_state->recording_handle, new_game_input, sizeof(*new_game_input), &bytes_written, 0);
+}
+
+void win32_playback_input(Win32State* win32_state, GameInput* new_game_input)
+{
+    DWORD bytes_read = 0;
+    if (ReadFile(win32_state->playback_handle, new_game_input, sizeof(*new_game_input), &bytes_read, 0)) {
+        if (bytes_read == 0) {
+            int playing_index = win32_state->input_playing_index;
+            win32_end_input_playback(win32_state);
+            win32_begin_input_playback(win32_state, playing_index);
+            ReadFile(win32_state->playback_handle, new_game_input, sizeof(*new_game_input), &bytes_read, 0);
+        }
+    };
+    DEBUG_print_last_error();
+}
+
+void win32_process_pending_messages(Win32State* win32_state, GameControllerInput* keyboard_controller)
 {
     MSG message;
     while (PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
@@ -559,6 +633,17 @@ void win32_process_pending_messages(GameControllerInput* keyboard_controller)
                 else if (vk_code == 'P') {
                     if (is_down)
                         glob_pause = !glob_pause;
+                }
+                else if (vk_code == 'L') {
+                    if (is_down) {
+                        if (win32_state->input_recording_index == 0) {
+                            win32_begin_recording_input(win32_state, 1);
+                        }
+                        else {
+                            win32_end_recording_input(win32_state);
+                            win32_begin_input_playback(win32_state, 1);
+                        }
+                    }
                 }
 #endif
 
@@ -721,7 +806,7 @@ int CALLBACK WinMain(HINSTANCE instance,
     
     if (RegisterClass(&window_class)) {
         HWND window = CreateWindowExA(
-            0,
+            WS_EX_TOPMOST | WS_EX_LAYERED,
             window_class.lpszClassName,
             "Handmade Hero",
             WS_OVERLAPPEDWINDOW|WS_VISIBLE,
@@ -735,10 +820,6 @@ int CALLBACK WinMain(HINSTANCE instance,
             nullptr
         );
         if (window) {
-            // NOTE(casey): Since we specified CS_OWNDC, we can just
-            // get one device context and use it forever because we
-            // are not sharing it with anyone
-            HDC device_context = GetDC(window);
 
             Win32SoundOutput sound_output = {};
 
@@ -753,6 +834,7 @@ int CALLBACK WinMain(HINSTANCE instance,
             win32_clear_sound_buffer(sound_output);
             glob_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
 
+            Win32State win32_state = {};
             glob_running = true;
 
 #if 0
@@ -778,16 +860,17 @@ int CALLBACK WinMain(HINSTANCE instance,
 #endif
             GameMemory game_memory = {};
             game_memory.permanent_storage_size = MEGABYTES(64);
-            game_memory.transient_storage_size = GIGABYTES(4ull);
+            game_memory.transient_storage_size = GIGABYTES(1ull);
             
 #if HANDMADE_DEVELOPER_BUILD
             game_memory.DEBUG_platform_free_file_memory = &DEBUG_platform_free_file_memory;
             game_memory.DEBUG_platform_read_entire_file = &DEBUG_platform_read_entire_file;
             game_memory.DEBUG_platform_write_entire_file = &DEBUG_platform_write_entire_file;
 #endif
-            uint64_t total_size = game_memory.permanent_storage_size + game_memory.transient_storage_size;
-            game_memory.permanent_storage = VirtualAlloc(base_address, total_size,
+            win32_state.total_size = game_memory.permanent_storage_size + game_memory.transient_storage_size;
+            win32_state.game_memory_block = VirtualAlloc(base_address, win32_state.total_size,
                 MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            game_memory.permanent_storage = win32_state.game_memory_block;
             game_memory.transient_storage = static_cast<uint8_t*>(game_memory.permanent_storage)
                 + game_memory.permanent_storage_size;
 
@@ -876,7 +959,7 @@ int CALLBACK WinMain(HINSTANCE instance,
                             old_keyboard_controller->buttons[button_index].ended_down;
                     }
 
-                    win32_process_pending_messages(new_keyboard_controller);
+                    win32_process_pending_messages(&win32_state, new_keyboard_controller);
                     if (!glob_pause) {
                         // TODO(casey): Should we poll this more frequently?
                         DWORD max_controller_count = 1 + XUSER_MAX_COUNT;
@@ -982,8 +1065,8 @@ int CALLBACK WinMain(HINSTANCE instance,
                             // NOTE(daniel): Using a guess deadzone value to a generic joypad, maybe
                             // this can be an game option to address unpredictable joypad deadzones
                             // NOTE(daniel): joypad analog normalisation to signed short values like the xinput
-                            int64_t s_joypad_lanalogx = static_cast<int64_t>(UINT16_MAX / 2 - joyinfoex.dwXpos);   // signed values
-                            int64_t s_joypad_lanalogy = static_cast<int64_t>(UINT16_MAX / 2 - joyinfoex.dwYpos);
+                            int64_t s_joypad_lanalogx = static_cast<SHORT>(UINT16_MAX / 2 - joyinfoex.dwXpos) * -1 - 1;   // signed values
+                            int64_t s_joypad_lanalogy = static_cast<SHORT>(UINT16_MAX / 2 - joyinfoex.dwYpos);
                             new_joypad_controller->stick_averagex = win32_process_stick_value(s_joypad_lanalogx, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE/2);
                             new_joypad_controller->stick_averagey = win32_process_stick_value(s_joypad_lanalogy, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE/2);
 #pragma warning(disable:4189)
@@ -1028,6 +1111,14 @@ int CALLBACK WinMain(HINSTANCE instance,
                         buffer.height = glob_backbuffer.height;
                         buffer.pitch = glob_backbuffer.pitch;
                         buffer.bytes_per_pixel = glob_backbuffer.bytes_per_pixel;
+
+                        if (win32_state.input_recording_index) {
+                            win32_record_input(&win32_state, new_game_input);
+                        }
+                        if (win32_state.input_playing_index) {
+                            win32_playback_input(&win32_state, new_game_input);
+                        }
+
                         game_library.update_and_render(&game_memory, new_game_input, buffer);
 
                         LARGE_INTEGER audio_wall_clock = win32_get_wall_clock();
@@ -1184,7 +1275,9 @@ int CALLBACK WinMain(HINSTANCE instance,
                         // NOTE(casey): Note, current is wrong on the zero'th index
                         win32_DEBUG_sync_display(&glob_backbuffer, ARRAY_COUNT(DEBUG_time_markers), DEBUG_time_markers, DEBUG_time_markers_index - 1, &sound_output, target_seconds_per_frame);
 #endif
+                        HDC device_context = GetDC(window);
                         win32_display_buffer_in_window(glob_backbuffer, device_context, dimension.width, dimension.height);
+                        ReleaseDC(window, device_context);
 
                         flip_wall_clock = win32_get_wall_clock();
 

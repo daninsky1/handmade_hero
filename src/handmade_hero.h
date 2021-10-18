@@ -164,4 +164,6 @@ struct GameState {
 
     int playerx;
     int playery;
+
+    float tjump;
 };
