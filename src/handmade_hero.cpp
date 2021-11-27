@@ -8,7 +8,7 @@ void game_output_sound(GameState* game_state, GameSoundOutputBuffer& sound_buffe
 
     int16_t* sample_out = sound_buffer.samples;
     for (uint32_t sample_i = 0; sample_i < sound_buffer.sample_count; ++sample_i) {
-#if 0
+#if 1
         float sine_value = sinf(game_state->tsine);
         int16_t sample_value = static_cast<int16_t>(sine_value * tone_volume);
 #else
@@ -105,23 +105,24 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
 
         float move_step = 6.0f;
         if (controller->move_up.ended_down) {
-            game_state->playery -= move_step;
+            game_state->playery -= static_cast<int>(move_step);
         }
         if (controller->move_down.ended_down) {
-            game_state->playery += move_step;
+            game_state->playery += static_cast<int>(move_step);
         }
         if (controller->move_left.ended_down) {
-            game_state->playerx -= move_step;
+            game_state->playerx -= static_cast<int>(move_step);
         }
         if (controller->move_right.ended_down) {
-            game_state->playerx += move_step;
+            game_state->playerx += static_cast<int>(move_step);
         }
 
         game_state->playerx += static_cast<int>(move_step * controller->stick_averagex);
         game_state->playery -= static_cast<int>(move_step * controller->stick_averagey);
 
         if (game_state->tjump > 0) {
-            game_state->playery += static_cast<int>(5.0f * sinf(0.5f*M_PI*game_state->tjump));
+            game_state->playery += static_cast<int>(5.0f * sinf(0.5f*(float)M_PI*game_state->tjump));
+
         }
         if (controller->action_down.ended_down) {
             game_state->tjump = 4.0f;

@@ -396,3 +396,4 @@ data/
 *.swp
 *.vim
 tags
+out/
