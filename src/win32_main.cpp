@@ -1031,11 +1031,14 @@ int CALLBACK WinMain(HINSTANCE instance,
                         // NOTE(daniel): my generic controller input
                         // NOTE(daniel): This is playstation 2 nomenclatures
                         // TODO(daniel): Check this controller array possition
-                        GameControllerInput* old_joypad_controller = get_controller(old_game_input, 5);
-                        GameControllerInput* new_joypad_controller = get_controller(old_game_input, 5);
 
                         // NOTE(daniel): Get joypad state
-                        if (joyGetPosEx(joystick_id, &joyinfoex) != JOYERR_UNPLUGGED) {
+                        MMRESULT joy_status = joyGetPosEx(JOYSTICKID1, &joyinfoex);
+                        if ((joyGetPosEx(joystick_id, &joyinfoex) != JOYERR_UNPLUGGED)
+                            && (joy_capabilities.wMaxButtons >= 8)) {
+                            GameControllerInput* old_joypad_controller = get_controller(old_game_input, 5);
+                            GameControllerInput* new_joypad_controller = get_controller(old_game_input, 5);
+
                             new_joypad_controller->is_analog = true;
                             // NOTE(daniel): Using a guess deadzone value to a generic joypad, maybe
                             // this can be an game option to address unpredictable joypad deadzones
