@@ -59,7 +59,7 @@ void render_player(GameOffscreenBuffer* buffer, int playerx, int playery)
     }
 }
 
-extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
+extern "C" void game_update_and_render(GameMemory* memory, GameInput* input, GameOffscreenBuffer& buffer)
 {
     ASSERT((&input->controllers[0].start - &input->controllers[0].buttons[0]) == (ARRAY_COUNT(input->controllers[0].buttons) - 1));
     ASSERT(sizeof(GameState) <= memory->permanent_storage_size);
@@ -134,7 +134,7 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render)
     render_player(&buffer, game_state->playerx, game_state->playery);
 }
 
-extern "C" GAME_GET_SOUND_SAMPLES(game_get_sound_samples)
+extern "C" void game_get_sound_samples(GameMemory* memory, GameSoundOutputBuffer& sound_buffer)
 {
     GameState* game_state = reinterpret_cast<GameState*>(memory->permanent_storage);
     game_output_sound(game_state, sound_buffer);
